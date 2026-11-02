@@ -170,11 +170,11 @@ function toast(t){ let el=$('#toast'); if(!el){ el=document.createElement('div')
 function uid(p){ return p+'-'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 /* saving */
 async function saveRec(col,id,data){
-  if(db){ try{ await db.collection(col).doc(id).set(data); toast('Saved. Everyone using this link can see it.'); return true; }
+  if(db){ try{ await db.collection(col).doc(id).set(data); toast('Saved. Everyone signed in can see it.'); return true; }
     catch(e){ toast(e&&(e.code==='permission_denied'||e.code==='not_granted')?'You can view but not save. Ask the owner for edit access.':'Could not save just now. Please try again.'); return false; } }
   const list=(col==='plans'||col==='clients'||col==='master')?null:store[col];
   if(col==='plans'||col==='clients'||col==='master') store[col][id]=Object.assign({id},data); else { const i=list.findIndex(x=>x.id===id); const rec=Object.assign({id},data); if(i>=0) list[i]=rec; else list.push(rec); }
-  onStore(col); toast('Saved for this session. Shared saving works on the published link.'); return true;
+  onStore(col); toast('Saved for this session. Shared saving turns on once the database is connected.'); return true;
 }
 async function delRec(col,id){
   if(db){ try{ await db.collection(col).doc(id).delete(); toast('Deleted.'); }catch(e){ toast('Could not delete.'); } return; }
@@ -192,7 +192,7 @@ async function initCaps(){
   }
   updateSaveNotes();
 }
-function updateSaveNotes(){ const t=db?'Shared saving is on: saved items are visible to everyone with this link.':'Saved items last while this page is open. Shared saving works on the published link.'; $$('.savenote').forEach(e=>e.textContent=t); const o=$('#offSaveNote'); if(o) o.textContent=db?'Shared with everyone using this link':'This session only'; }
+function updateSaveNotes(){ const t=db?'Shared saving is on: saved items are visible to everyone signed in.':'Saved items last while this page is open. Shared saving turns on once the database is connected.'; $$('.savenote').forEach(e=>e.textContent=t); const o=$('#offSaveNote'); if(o) o.textContent=db?'Shared with everyone signed in':'This session only'; }
 /* files */
 async function saveFile(filename,data,mime){
   const blob=data instanceof Blob?data:new Blob([data],{type:mime||'application/octet-stream'});
@@ -899,7 +899,7 @@ function docListNow(){ if(client.ov.docList) return client.ov.docList; const std
 let cfgTimer=null;
 function cfgStatus(t){ const e=$('#cfgStatus'); if(e) e.textContent=t; }
 function saveCfg(){ if(isDefC()) return; cfgStatus('Saving…'); clearTimeout(cfgTimer); cfgTimer=setTimeout(async()=>{ const data={ov:JSON.parse(JSON.stringify(client.ov)),client:client.id,updated:new Date().toISOString()};
-  if(db){ try{ await db.collection('clients').doc(client.id).set(data); cfgStatus('Saved · shared with everyone using this link'); }catch(e){ cfgStatus('Not saved: you may have view-only access'); } } else cfgStatus('Saved for this session'); },600); }
+  if(db){ try{ await db.collection('clients').doc(client.id).set(data); cfgStatus('Saved · shared with everyone signed in'); }catch(e){ cfgStatus('Not saved: you may have view-only access'); } } else cfgStatus('Saved for this session'); },600); }
 function cfgChanged(rebuildJourney){ saveCfg(); applyClient(false); if(rebuildJourney&&S){ buildPlan(); renderTimeline(); S.docsTotal=cv('docs').split(';').filter(x=>x.trim()).length; renderBrain(); } }
 STORE_HOOKS.push(k=>{ if(k!=='clients') return; Object.values(store.clients||{}).forEach(d=>{ const c=CLIENTS.find(x=>x.id===d.id); if(c&&d.ov) c.ov=JSON.parse(JSON.stringify(d.ov)); }); const inCfg=document.activeElement&&$('#tab-config').contains(document.activeElement); if(!$('#tab-config').hidden&&!inCfg) renderConfig(); applyClient(false); if(S){ buildPlan(); renderTimeline(); } });
 const HRMS=['HROne','Darwinbox','Keka','greytHR','Zoho People','Adrenalin','PeopleStrong','SAP SuccessFactors','Oracle HCM','Other'];

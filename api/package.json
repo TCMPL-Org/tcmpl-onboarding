@@ -1,0 +1,13 @@
+{
+  "name": "tcmpl-onboarding-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "src/functions/*.js",
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test test/*.test.js" },
+  "dependencies": {
+    "@azure/cosmos": "^4.10.1",
+    "@azure/functions": "^4.17.0"
+  }
+}

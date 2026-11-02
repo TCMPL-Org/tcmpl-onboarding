@@ -2,6 +2,7 @@ import React, { useLayoutEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import preservedMarkup from './preserved.html?raw';
 import './styles.css';
+import './azure-bridge.js';
 
 function PreservedApplication() {
   useLayoutEffect(() => {
