@@ -13,7 +13,7 @@
 
 const crypto = require('node:crypto');
 
-const COLLECTIONS = new Set(['structures', 'templates', 'plans', 'offers', 'clients', 'master', 'employees', 'fx']);
+const COLLECTIONS = new Set(['structures', 'templates', 'plans', 'offers', 'clients', 'master', 'employees', 'fx', 'candidates', 'messages']);
 const ID_RE = /^[A-Za-z0-9_.:-]{1,200}$/;
 
 function tenant() { return process.env.TENANT_ID || 'tcmpl'; }

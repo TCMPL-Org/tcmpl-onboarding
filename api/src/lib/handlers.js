@@ -4,6 +4,8 @@
 
 const { getStore, validCol, validId } = require('./store');
 const { aiConfigured, completeJson } = require('./ai');
+const wa = require('./whatsapp');
+const conversations = require('./conversations');
 
 const MAX_DOC_BYTES = 1800000; // Cosmos DB items are limited to 2 MB
 
@@ -11,13 +13,14 @@ const json = (status, body) => ({ status, jsonBody: body });
 
 function health() {
   const store = getStore();
-  return json(200, { ok: true, db: Boolean(store), store: store ? store.kind : null, ai: aiConfigured() });
+  return json(200, { ok: true, db: Boolean(store), store: store ? store.kind : null, ai: aiConfigured(), whatsapp: wa.waConfigured(), webhook: wa.webhookConfigured() });
 }
 
 async function data({ method, col, id, body, user }) {
   if (!user) return json(401, { error: 'sign_in_required' });
   if (!validCol(col)) return json(404, { error: 'unknown_collection' });
   if (id !== undefined && id !== null && id !== '' && !validId(id)) return json(400, { error: 'bad_id' });
+  if (col === 'messages' && method !== 'GET') return json(403, { error: 'messages_are_read_only' });
   const store = getStore();
   if (!store) return json(503, { error: 'database_not_configured' });
 
@@ -60,4 +63,32 @@ async function ai({ body, user }) {
   }
 }
 
-module.exports = { health, data, ai };
+async function waStart({ body, user }) {
+  if (!user) return json(401, { error: 'sign_in_required' });
+  const r = await conversations.startForOffer(body || {}, user);
+  return json(r.status, r.body);
+}
+
+async function waSend({ body, user }) {
+  if (!user) return json(401, { error: 'sign_in_required' });
+  const r = await conversations.sendManual(body || {}, user);
+  return json(r.status, r.body);
+}
+
+// Meta webhook: GET = subscription check, POST = incoming messages.
+function waVerify(query) {
+  const ok = query.get('hub.mode') === 'subscribe' && process.env.WHATSAPP_VERIFY_TOKEN && query.get('hub.verify_token') === process.env.WHATSAPP_VERIFY_TOKEN;
+  return ok ? { status: 200, body: String(query.get('hub.challenge') || '') } : { status: 403, body: 'Forbidden' };
+}
+
+async function waWebhook(rawBody, signature) {
+  if (!wa.verifySignature(rawBody, signature)) return { status: 401, body: 'Bad signature' };
+  let payload;
+  try { payload = JSON.parse(rawBody); } catch { return { status: 400, body: 'Bad JSON' }; }
+  for (const m of wa.parseInbound(payload)) {
+    try { await conversations.handleInbound(m); } catch (e) { console.error('whatsapp inbound failed', e && e.message); }
+  }
+  return { status: 200, body: 'OK' };
+}
+
+module.exports = { health, data, ai, waStart, waSend, waVerify, waWebhook };

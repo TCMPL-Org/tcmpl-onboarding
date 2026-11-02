@@ -6,7 +6,7 @@ import './azure-bridge.js';
 
 function PreservedApplication() {
   useLayoutEffect(() => {
-    import('./legacy-app.js');
+    import('./legacy-app.js').then(() => import('./wa-inbox.js'));
   }, []);
   return React.createElement('div', {
     id: 'tcmpl-preserved-app',
