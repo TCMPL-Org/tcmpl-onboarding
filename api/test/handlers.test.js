@@ -47,7 +47,7 @@ test('oversized records are refused', async () => {
 
 test('AI is off until configured, then calls Azure OpenAI', async () => {
   assert.equal((await handlers.ai({ body: { prompt: 'hi' }, user })).status, 503);
-  process.env.AZURE_OPENAI_ENDPOINT = 'https://example.openai.azure.com/';
+  process.env.AZURE_OPENAI_ENDPOINT = 'https://example.openai.azure.com/openai/v1';
   process.env.AZURE_OPENAI_API_KEY = 'test-key';
   process.env.AZURE_OPENAI_DEPLOYMENT = 'chat';
   const realFetch = global.fetch;
