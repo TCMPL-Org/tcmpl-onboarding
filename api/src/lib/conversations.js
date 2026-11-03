@@ -29,6 +29,16 @@ async function saveMessage(store, id, m, user) {
 
 function str(v, max) { return typeof v === 'string' ? v.slice(0, max) : ''; }
 
+// The offer details the journey needs to rebuild each touchpoint's standard message later.
+function cleanProfile(p) {
+  if (!p || typeof p !== 'object') return null;
+  const out = {};
+  for (const k of ['name', 'first', 'mobile', 'email', 'role', 'dept', 'grade', 'state', 'doj', 'mgr', 'client']) out[k] = str(p[k], 200);
+  for (const k of ['ctc', 'monthly', 'gross']) out[k] = Number.isFinite(+p[k]) ? Math.round(+p[k]) : 0;
+  out.isMgr = Boolean(p.isMgr); out.esic = Boolean(p.esic);
+  return out;
+}
+
 // HR released an offer: register the candidate and send the opening template.
 async function startForOffer(p, user) {
   const store = getStore();
@@ -44,6 +54,7 @@ async function startForOffer(p, user) {
     company: str(p.company, 200), agentName: str(p.agentName, 60), recruiter: str(p.recruiter, 120), doj: str(p.doj, 40),
     facts: str(p.facts, 12000), faq: str(p.faq, 6000), offerId: str(p.offerId, 100),
     stage: 'Offer released', risk: prev.risk || [], riskScore: prev.riskScore || 0, handovers: prev.handovers || [],
+    profile: cleanProfile(p.profile), releasedAt: new Date().toISOString(), touchpoints: prev.touchpoints || {},
     lastMessageAt: new Date().toISOString()
   };
   if (wa.waConfigured() && typeof p.letterPdfBase64 === 'string' && p.letterPdfBase64.length > 100 && p.letterPdfBase64.length < 7000000) {
@@ -175,6 +186,8 @@ async function pushItems(p, user) {
   }
   cand.lastMessageAt = new Date().toISOString();
   if (label) cand.stage = label;
+  const key = str(p.touchpointKey, 60);
+  if (key) cand.touchpoints = Object.assign({}, cand.touchpoints, { [key]: { at: cand.lastMessageAt, by: user.name, label } });
   await store.put('candidates', candidateId, cand, user);
   return { status: 200, body: { sent } };
 }

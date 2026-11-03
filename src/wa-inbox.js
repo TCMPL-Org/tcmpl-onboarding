@@ -40,7 +40,8 @@ window.tcmplWA = Object.assign(window.tcmplWA || {}, {
     }
     delete body.letterPdf;
     const r = await getJson('/api/wa/start', { method: 'POST', body: JSON.stringify(body) }).catch(() => ({ ok: false, body: null }));
-    if (r.ok && r.body && r.body.sent) toast(`WhatsApp sent to ${payload.name}. Replies appear in the WhatsApp tab.`);
+    if (r.ok && r.body && r.body.candidateId && window.tcmplLive) window.tcmplLive.reload(r.body.candidateId);
+    if (r.ok && r.body && r.body.sent) toast(`WhatsApp sent to ${payload.name}. Their chat is on the Candidate journey tab.`);
     else if (r.ok && r.body && r.body.reason === 'whatsapp_not_configured') { /* WhatsApp not switched on yet: stay quiet */ }
     else if (r.body && r.body.error === 'valid_mobile_required') toast('WhatsApp not sent: add a valid mobile number for the candidate.');
     else toast('WhatsApp could not be sent. Check the WhatsApp tab for details.');
@@ -115,8 +116,8 @@ async function collectTouchpoint() {
   return { items, skipped };
 }
 
-async function push(candidateId, items, touchpoint) {
-  return getJson('/api/wa/push', { method: 'POST', body: JSON.stringify({ candidateId, items, touchpoint }) }).catch(() => ({ ok: false, body: null }));
+async function push(candidateId, items, touchpoint, touchpointKey) {
+  return getJson('/api/wa/push', { method: 'POST', body: JSON.stringify({ candidateId, items, touchpoint, touchpointKey }) }).catch(() => ({ ok: false, body: null }));
 }
 
 function explain(r) {
@@ -164,6 +165,8 @@ window.tcmplWA.onTouchpoint = () => {
   if (auto && auto.checked) setTimeout(() => sendCurrentTouchpoint(true), 400);
 };
 
+window.tcmplWAUtil = { toWaText, push, explain, candId, blobToBase64, getJson, loadHealth, toast, fmt: (t) => fmt(t), esc };
+
 /* ---------- tab ---------- */
 function mount() {
   const nav = $('nav.tabs'), main = $('main.wrap') || ($('section.tab') && $('section.tab').parentElement);
@@ -178,7 +181,7 @@ function mount() {
   sec.className = 'tab'; sec.id = 'tab-wa'; sec.hidden = true;
   sec.innerHTML = `
   <div class="intro"><div><h2>WhatsApp inbox</h2><p>Live conversations between the agent and candidates on WhatsApp. The agent answers automatically; reply here when a person needs to step in.</p></div>
-    <div class="row"><span class="chip" id="waState">Checking…</span><button class="btn small" id="waLetter" type="button">Send offer letter again</button><button class="btn small" id="waRefresh">Refresh</button></div></div>
+    <div class="row"><span class="chip" id="waState">Checking…</span><button class="btn small primary" id="waOpenJ" type="button">Open journey</button><button class="btn small" id="waLetter" type="button">Send offer letter again</button><button class="btn small" id="waRefresh">Refresh</button></div></div>
   <div class="grid2" style="grid-template-columns:minmax(260px,.9fr) minmax(0,1.1fr)">
     <div class="card"><h3 style="margin-bottom:8px">Candidates</h3><div id="waList"><div class="note">No WhatsApp conversations yet. Release an offer for a candidate with a valid mobile number.</div></div></div>
     <div>
@@ -207,6 +210,11 @@ function mount() {
   nav.querySelectorAll('button').forEach(b => { if (b !== btn) b.addEventListener('click', () => { btn.setAttribute('aria-selected', 'false'); sec.hidden = true; }); });
 
   $('#waRefresh').onclick = () => refresh(true);
+  $('#waOpenJ').onclick = () => {
+    if (!selected) { toast('Select a candidate first.'); return; }
+    const b = document.querySelector('nav.tabs button[data-tab="journey"]'); if (b) b.click();
+    if (window.tcmplLive) window.tcmplLive.reload(selected);
+  };
   $('#waLetter').onclick = async () => {
     if (!selected) { toast('Select a candidate first.'); return; }
     const item = { type: 'letter' };

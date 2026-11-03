@@ -58,7 +58,7 @@ test('webhook rejects unsigned or forged posts', async () => {
 
 test('release -> template sent; candidate reply -> AI answer on WhatsApp, risk + handover recorded', async () => {
   setEnv(); mockFetch(); sent.length = 0;
-  const start = await handlers.waStart({ user, body: { name: 'Ritika Sharma', mobile: '+91 98100 00000', role: 'Senior Executive', client: 'northpeak', clientLabel: 'Northpeak', company: 'Northpeak Logistics', agentName: 'Asha', facts: 'salaryDate: 7th of every month', faq: '', letterPdfBase64: Buffer.from('%PDF-1.4 fake offer letter content '.repeat(10)).toString('base64'), letterFile: 'Offer_Letter_Ritika.pdf' } });
+  const start = await handlers.waStart({ user, body: { name: 'Ritika Sharma', mobile: '+91 98100 00000', role: 'Senior Executive', client: 'northpeak', clientLabel: 'Northpeak', company: 'Northpeak Logistics', agentName: 'Asha', facts: 'salaryDate: 7th of every month', faq: '', profile: { name: 'Ritika Sharma', doj: '2026-12-01', ctc: 960000, client: 'northpeak', role: 'Senior Executive' }, letterPdfBase64: Buffer.from('%PDF-1.4 fake offer letter content '.repeat(10)).toString('base64'), letterFile: 'Offer_Letter_Ritika.pdf' } });
   assert.equal(start.status, 200);
   assert.equal(start.jsonBody.sent, true);
   assert.equal(sent[0].type, 'template');
@@ -116,7 +116,7 @@ test('release without WhatsApp keys still registers the candidate', async () => 
 
 test('HR sends a prepared touchpoint: buttons + offer letter, letter first', async () => {
   setEnv(); mockFetch(); sent.length = 0;
-  const r = await handlers.waPush({ user, body: { candidateId: 'wa-919810000000', touchpoint: 'Documents and KYC', items: [
+  const r = await handlers.waPush({ user, body: { candidateId: 'wa-919810000000', touchpoint: 'Documents and KYC', touchpointKey: 'docs', items: [
     { type: 'text', text: 'Next, I need a few documents.\n• PAN\n• Aadhaar', buttons: ['Send Aadhaar photo', "I'll use the link"] },
     { type: 'letter', filename: 'Offer_Letter_Ritika.pdf', pdfBase64: Buffer.from('%PDF-1.4 regenerated '.repeat(10)).toString('base64') }
   ] } });
@@ -128,6 +128,8 @@ test('HR sends a prepared touchpoint: buttons + offer letter, letter first', asy
   assert.equal(sent[1].type, 'document');
   const cand = (await getStore().get('candidates', 'wa-919810000000')).data;
   assert.equal(cand.stage, 'Documents and KYC');
+  assert.equal(cand.touchpoints.docs.label, 'Documents and KYC');
+  assert.equal(cand.profile.doj, '2026-12-01');
 });
 
 test('sending after the 24-hour window explains the problem', async () => {

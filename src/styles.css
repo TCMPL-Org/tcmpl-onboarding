@@ -242,3 +242,19 @@ details summary{cursor:pointer;font-weight:600;color:var(--teal-ink)}
 @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
 
 img{max-width:100%}body{margin:0}
+/* ---------- Live candidate journey ---------- */
+.jl-top{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;padding:10px 14px;margin-bottom:16px}
+.jl-top select{min-width:260px}
+.jl-grid{display:grid;grid-template-columns:280px minmax(0,1fr) 380px;gap:16px;align-items:start}
+.jl-grid>*{min-width:0}
+@media (max-width:1250px){.jl-grid{grid-template-columns:250px minmax(0,1fr)}.jl-side{grid-column:1/-1}}
+@media (max-width:780px){.jl-grid{grid-template-columns:1fr}}
+.jl-tps{max-height:76vh;overflow:auto;padding:8px}
+.jl-tp{cursor:pointer;border:1px solid transparent;width:100%;text-align:left;background:none;font:inherit;color:inherit}
+.jl-tp:hover{background:var(--chip)}
+.jl-tp.sel{border-color:var(--teal);background:var(--teal-soft)}
+.jl-tp.off{cursor:default;opacity:.55}
+.jl-tp .st{font-size:.74rem;font-weight:600;margin-top:2px}
+.jl-prev textarea{width:100%;min-height:160px;font:inherit;font-size:.9rem;border:1px solid var(--line);border-radius:8px;padding:8px;box-sizing:border-box;background:var(--surface);color:inherit;margin-top:6px}
+.jl-btns{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.jl-empty{padding:28px;text-align:center}

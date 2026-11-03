@@ -444,7 +444,7 @@ $('#saveStruct').onclick=async()=>{ const nm=$('#structName')?$('#structName').v
 $('#modeMake').onclick=()=>setMode('make'); $('#modeUpload').onclick=()=>setMode('upload');
 function setMode(m){ $('#modeMake').setAttribute('aria-pressed',m==='make'); $('#modeUpload').setAttribute('aria-pressed',m==='upload'); $('#makePane').hidden=m!=='make'; $('#uploadPane').hidden=m!=='upload'; }
 $('#releaseOffer').onclick=async()=>{ renderOffer(); const c=fromOffer(); startCandidate(c); showTab('journey');
-  const offerId=uid('of'); if(window.tcmplWA){ try{ window.tcmplWA.start({offerId,name:c.name,first:c.first,mobile:c.mobile,email:c.email,role:c.role,client:client.id,clientLabel:client.label,company:cv('company'),agentName:cv('agentName'),recruiter:cv('recruiter'),doj:readCand().doj,facts:kbText(),faq:cv('faq').map(f=>f[0]+': '+f[2]).join('\n'),letterPdf:(()=>{ try{ return letterPdfBlob(); }catch(e){ return null; } })(),letterFile:letterFile()+'.pdf'}); }catch(e){ console.warn(e); } }
+  const offerId=uid('of'); if(window.tcmplWA){ try{ window.tcmplWA.start({offerId,profile:Object.assign({},c,{doj:readCand().doj,client:client.id}),name:c.name,first:c.first,mobile:c.mobile,email:c.email,role:c.role,client:client.id,clientLabel:client.label,company:cv('company'),agentName:cv('agentName'),recruiter:cv('recruiter'),doj:readCand().doj,facts:kbText(),faq:cv('faq').map(f=>f[0]+': '+f[2]).join('\n'),letterPdf:(()=>{ try{ return letterPdfBlob(); }catch(e){ return null; } })(),letterFile:letterFile()+'.pdf'}); }catch(e){ console.warn(e); } }
   const {r}=lastOffer; saveRec('offers',offerId,{name:c.name,role:c.role,client:client.id,clientLabel:client.label,ctc:Math.round(r.ctc),monthlyGross:Math.round(r.G/12),takeHome:Math.round(r.monthly),template:($('#oTpl').selectedOptions[0]||{}).textContent||'',structure:salMode==='manual'?'Manual components':curStruct().name,doj:readCand().doj,status:'Released',released:new Date().toISOString()}); };
 function fromOffer(){ const {c,r}=lastOffer; return {name:c.name,first:c.name.split(' ')[0],mobile:c.mobile,email:c.email,role:c.role,dept:c.dept,isMgr:c.isMgr,grade:c.grade,state:c.state,doj:new Date(c.doj+'T00:00:00'),mgr:c.mgr,ctc:Math.round(r.ctc),monthly:r.monthly,gross:r.G,esic:r.esic,offerSource:'Client Hub offer desk',hasOffer:true}; }
 const CSV_SAMPLE=`name,mobile,email,designation,location,doj,ctc,manager,offer_letter_ref
@@ -476,6 +476,26 @@ const TP={
   it_15:{t:'IT, Admin, Security: request',k:'s'}, it_7:{t:'IT, Admin, Security: reminder',k:'s'}, it_2:{t:'Readiness check and escalation',k:'s'}, ann:{t:'Joining announcement draft',k:'s'}, stat:{t:'PF, ESI and insurance enrolment',k:'s'}
 };
 let S=null; window.tcmplCurrent=()=>S&&S.c; window.tcmplTouchpoint=()=>S&&S.plan&&S.plan[S.idx]?tpInfo(S.plan[S.idx].key).t:''; window.tcmplLetterPdf=()=>{ try{ return lastOffer?{blob:letterPdfBlob(),name:letterFile()+'.pdf'}:null; }catch(e){ return null; } };
+/* ---- Live journey support: build any touchpoint's standard message for a real candidate, without disturbing the demo ---- */
+function tcmplProfileToC(p){ p=p||{}; const doj=/^\d{4}-\d{2}-\d{2}$/.test(p.doj||'')?new Date(p.doj+'T00:00:00'):new Date(OFFER_DATE.getTime()+28*DAY);
+  const name=p.name||'Candidate'; return {name,first:p.first||name.split(' ')[0],mobile:p.mobile||'',email:p.email||'',role:p.role||'',dept:p.dept||'',isMgr:!!p.isMgr,grade:p.grade||'',state:p.state||'',doj,mgr:p.mgr||'',ctc:+p.ctc||0,monthly:+p.monthly||0,gross:+p.gross||0,esic:!!p.esic,offerSource:'Client Hub offer desk',hasOffer:true}; }
+function tcmplSandbox(profile,fn){
+  const box=$('#msgs'), logs=['#actLog','#hoLog','#cbList'].map(q=>$(q)).filter(Boolean);
+  const keepS=S, keepClient=client, keepKids=[...box.childNodes], keepLogs=logs.map(el=>[...el.childNodes]);
+  const stubs={saveRec,saveFile,toast,showTab}; saveRec=async()=>true; saveFile=async()=>{}; toast=()=>{}; showTab=()=>{};
+  try{
+    const cl=CLIENTS.find(x=>x.id===(profile&&profile.client)); if(cl) client=cl;
+    const c=tcmplProfileToC(profile);
+    S={c,idx:-1,day:0,accepted:!!(profile&&profile.accepted),docs:0,docsTotal:cv('docs').split(';').length,confirmed:false,resigned:'Not asked yet',quiz:null,pulses:[],risk:[],handovers:[],actions:[],chat:[],callbacks:[],forms:false,call:false,pd:pdataFor(c),formState:{},formVals:{},editing:null,awaitFix:null,kyc:false,quiet:false,lastDay:-1,ready:readyTemplate()};
+    buildPlan(); box.replaceChildren(); return fn();
+  } finally {
+    saveRec=stubs.saveRec; saveFile=stubs.saveFile; toast=stubs.toast; showTab=stubs.showTab;
+    S=keepS; client=keepClient; box.replaceChildren(...keepKids); logs.forEach((el,i)=>el.replaceChildren(...keepLogs[i]));
+    if(S){ try{ renderBrain(); }catch(e){ /* ignore */ } }
+  }
+}
+window.tcmplPlanFor=(profile)=>tcmplSandbox(profile,()=>S.plan.map(tp=>{ const inf=tpInfo(tp.key); const d=new Date(S.c.doj.getTime()+(tp.abs-S.gap)*DAY); return {key:tp.key,label:inf.t,track:inf.k,rel:relLabel(tp.abs),date:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}; }));
+window.tcmplRenderTouchpoint=(profile,key)=>tcmplSandbox(profile,()=>{ const tp=S.plan.find(x=>x.key===key)||{key,abs:0}; S.idx=Math.max(0,S.plan.indexOf(tp)); (RUN[key]||runCustom)(tp); return [...$('#msgs').children].map(n=>n.cloneNode(true)); });
 function parseOff(code,gap){ const m=/^([OD])([+-]\d+)$/.exec(code||''); if(!m) return null; const n=+m[2]; return m[1]==='O'?n:gap+n; }
 function buildPlan(){
   const gap=Math.max(3,Math.round((S.c.doj-OFFER_DATE)/DAY)); S.gap=gap;
