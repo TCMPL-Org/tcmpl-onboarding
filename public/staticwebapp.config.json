@@ -7,6 +7,19 @@
       ]
     },
     {
+      "route": "/privacy",
+      "rewrite": "/privacy.html",
+      "allowedRoles": [
+        "anonymous"
+      ]
+    },
+    {
+      "route": "/privacy.html",
+      "allowedRoles": [
+        "anonymous"
+      ]
+    },
+    {
       "route": "/.auth/login/github",
       "statusCode": 404
     },
@@ -31,7 +44,8 @@
     "rewrite": "/index.html",
     "exclude": [
       "/assets/*",
-      "/.auth/*"
+      "/.auth/*",
+      "/privacy.html"
     ]
   },
   "globalHeaders": {
