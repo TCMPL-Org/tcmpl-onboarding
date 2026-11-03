@@ -145,3 +145,27 @@ test('push needs a registered candidate', async () => {
   const r = await handlers.waPush({ user, body: { candidateId: 'wa-910000000000', items: [{ type: 'text', text: 'Hi' }] } });
   assert.equal(r.status, 404);
 });
+
+test('offer letter is kept in the database and sent later even if the first upload failed', async () => {
+  setEnv(); sent.length = 0;
+  // release while Meta rejects uploads (e.g. expired token)
+  global.fetch = async (url) => (String(url).includes('/media')
+    ? { ok: false, status: 401, json: async () => ({ error: { message: 'Authentication Error', code: 190 } }) }
+    : { ok: false, status: 401, json: async () => ({ error: { message: 'Authentication Error', code: 190 } }) });
+  const pdf = Buffer.from('%PDF-1.4 saved letter '.repeat(10)).toString('base64');
+  await handlers.waStart({ user, body: { name: 'Jeet Pawar', mobile: '+91 7623026914', letterPdfBase64: pdf, letterFile: 'Offer_Letter_Jeet_Pawar.pdf', profile: { name: 'Jeet Pawar', doj: '2026-12-01' } } });
+  const before = (await getStore().get('candidates', 'wa-917623026914')).data;
+  assert.equal(before.hasLetter, true);
+  assert.equal(before.letterMediaId, '');
+  // token fixed: "Send offer letter again" works without the Offer desk
+  mockFetch(); sent.length = 0;
+  const r = await handlers.waPush({ user, body: { candidateId: 'wa-917623026914', items: [{ type: 'letter' }] } });
+  assert.equal(r.status, 200);
+  assert.equal(sent[0].type, 'document');
+  assert.equal(sent[0].document.filename, 'Offer_Letter_Jeet_Pawar.pdf');
+});
+
+test('saved letters cannot be read from the browser', async () => {
+  const r = await handlers.data({ method: 'GET', col: 'letters', user });
+  assert.equal(r.status, 403);
+});

@@ -29,6 +29,23 @@ async function saveMessage(store, id, m, user) {
 
 function str(v, max) { return typeof v === 'string' ? v.slice(0, max) : ''; }
 
+const MAX_PDF_B64 = 1300000; // ~1 MB PDF; fits in one database record
+const MEDIA_MAX_AGE_MS = 25 * 24 * 3600 * 1000; // WhatsApp keeps uploaded media for 30 days
+
+// Returns a WhatsApp media id for the candidate's offer letter, re-uploading the PDF
+// saved in the database when there is none yet or the upload is getting old.
+async function letterMedia(store, candidateId, cand) {
+  const fresh = cand.letterMediaId && cand.letterUploadedAt && (Date.now() - Date.parse(cand.letterUploadedAt)) < MEDIA_MAX_AGE_MS;
+  if (fresh) return cand.letterMediaId;
+  const rec = await store.get('letters', candidateId);
+  if (!rec || !rec.data || !rec.data.pdfBase64) return cand.letterMediaId || '';
+  cand.letterFile = rec.data.filename || cand.letterFile || 'Offer_Letter.pdf';
+  cand.letterMediaId = await wa.uploadMedia(Buffer.from(rec.data.pdfBase64, 'base64'), 'application/pdf', cand.letterFile);
+  cand.letterUploadedAt = new Date().toISOString();
+  cand.hasLetter = true;
+  return cand.letterMediaId;
+}
+
 // The offer details the journey needs to rebuild each touchpoint's standard message later.
 function cleanProfile(p) {
   if (!p || typeof p !== 'object') return null;
@@ -57,12 +74,17 @@ async function startForOffer(p, user) {
     profile: cleanProfile(p.profile), releasedAt: new Date().toISOString(), touchpoints: prev.touchpoints || {},
     lastMessageAt: new Date().toISOString()
   };
-  if (wa.waConfigured() && typeof p.letterPdfBase64 === 'string' && p.letterPdfBase64.length > 100 && p.letterPdfBase64.length < 7000000) {
-    try {
-      cand.letterMediaId = await wa.uploadMedia(Buffer.from(p.letterPdfBase64, 'base64'), 'application/pdf', str(p.letterFile, 150) || 'Offer_Letter.pdf');
-      cand.letterFile = str(p.letterFile, 150) || 'Offer_Letter.pdf';
-      cand.letterSent = false;
-    } catch (e) { cand.letterError = e.message; }
+  const pdf = typeof p.letterPdfBase64 === 'string' && p.letterPdfBase64.length > 100 && p.letterPdfBase64.length < MAX_PDF_B64 ? p.letterPdfBase64 : '';
+  if (pdf) {
+    cand.letterFile = str(p.letterFile, 150) || 'Offer_Letter.pdf';
+    cand.letterSent = false;
+    cand.letterMediaId = '';
+    cand.hasLetter = true;
+    await store.put('letters', candidateId, { pdfBase64: pdf, filename: cand.letterFile }, user);
+    if (wa.waConfigured()) {
+      try { cand.letterMediaId = await wa.uploadMedia(Buffer.from(pdf, 'base64'), 'application/pdf', cand.letterFile); cand.letterUploadedAt = new Date().toISOString(); }
+      catch (e) { cand.letterError = e.message; }
+    }
   }
   await store.put('candidates', candidateId, cand, user);
   if (!wa.waConfigured()) return { status: 200, body: { candidateId, sent: false, reason: 'whatsapp_not_configured' } };
@@ -104,10 +126,10 @@ async function handleInbound(m) {
 
   // WhatsApp allows files once the candidate has written to us: send the offer letter now, once.
   let letterSent = Boolean(cand.letterSent);
-  if (rec && cand.letterMediaId && !letterSent) {
+  if (rec && (cand.letterMediaId || cand.hasLetter) && !letterSent) {
     const caption = `Your offer letter from ${cand.company || cand.clientLabel || 'us'}. Ask me anything about it here.`;
     let lid = '', lerr = '';
-    try { lid = (await wa.sendDocument(cand.phone, cand.letterMediaId, cand.letterFile, caption)).id || ''; letterSent = !!lid; } catch (e) { lerr = e.message; }
+    try { const mid = await letterMedia(store, candidateId, cand); if (mid) { lid = (await wa.sendDocument(cand.phone, mid, cand.letterFile, caption)).id || ''; letterSent = !!lid; } } catch (e) { lerr = e.message; }
     await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: `[Offer letter PDF] ${caption}`, waId: lid, error: lerr, source: 'agent', kind: 'document' }, SYSTEM);
   }
 
@@ -120,6 +142,7 @@ async function handleInbound(m) {
   await store.put('candidates', candidateId, Object.assign({}, cand, {
     risk, riskScore: Math.min(100, risk.reduce((a, r) => a + (r.weight || 0), 0)), handovers,
     lastMessageAt: now, lastInboundAt: now, name: cand.name || m.name || '', letterSent,
+    letterMediaId: cand.letterMediaId || '', letterUploadedAt: cand.letterUploadedAt, letterFile: cand.letterFile,
     stage: /^\s*(yes,? and )?i? ?accept/i.test(text) ? 'Offer accepted' : cand.stage
   }), SYSTEM);
 }
@@ -161,13 +184,15 @@ async function pushItems(p, user) {
   for (const it of items) {
     try {
       if (it && it.type === 'letter') {
-        if (typeof it.pdfBase64 === 'string' && it.pdfBase64.length > 100 && it.pdfBase64.length < 7000000) {
+        if (typeof it.pdfBase64 === 'string' && it.pdfBase64.length > 100 && it.pdfBase64.length < MAX_PDF_B64) {
           cand.letterFile = str(it.filename, 150) || cand.letterFile || 'Offer_Letter.pdf';
-          cand.letterMediaId = await wa.uploadMedia(Buffer.from(it.pdfBase64, 'base64'), 'application/pdf', cand.letterFile);
+          await store.put('letters', candidateId, { pdfBase64: it.pdfBase64, filename: cand.letterFile }, user);
+          cand.letterMediaId = ''; cand.letterUploadedAt = ''; cand.hasLetter = true;
         }
-        if (!cand.letterMediaId) return { status: 400, body: { sent, error: 'no_offer_letter' } };
+        const mid = await letterMedia(store, candidateId, cand);
+        if (!mid) return { status: 400, body: { sent, error: 'no_offer_letter' } };
         const caption = `Your offer letter from ${cand.company || cand.clientLabel || 'us'}.`;
-        const r = await wa.sendDocument(cand.phone, cand.letterMediaId, cand.letterFile, caption);
+        const r = await wa.sendDocument(cand.phone, mid, cand.letterFile, caption);
         cand.letterSent = true;
         await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: `[Offer letter PDF] ${caption}`, waId: r.id || '', by: user.name, source: 'journey', touchpoint: label, kind: 'document' }, user);
       } else if (it && it.type === 'text' && typeof it.text === 'string' && it.text.trim()) {

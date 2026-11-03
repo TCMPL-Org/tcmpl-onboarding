@@ -124,8 +124,9 @@ function explain(r) {
   const e = r.body && r.body.error;
   if (e === 'window_closed') return 'Not sent: the candidate has not written on WhatsApp in the last 24 hours. Ask them to reply once (e.g. "Hi"), then send again.';
   if (e === 'candidate_not_found') return 'Not sent: release this offer first so the candidate is registered for WhatsApp.';
-  if (e === 'no_offer_letter') return 'Not sent: no offer letter PDF available. Open the Offer desk for this candidate and try again.';
+  if (e === 'no_offer_letter') return 'Not sent: no offer letter is saved for this candidate. Release the offer again from the Offer desk to save it.';
   if (e === 'whatsapp_not_configured') return 'WhatsApp is not connected yet.';
+  if (r.body && /authenticat|access token|session has expired|OAuth/i.test(r.body.detail || '')) return 'Not sent: the WhatsApp token in Azure has expired or is invalid. Generate a new token for the onboarding-agent system user in Meta and update WHATSAPP_TOKEN.';
   return 'Not sent' + (r.body && r.body.detail ? ': ' + r.body.detail : '. Please try again.');
 }
 

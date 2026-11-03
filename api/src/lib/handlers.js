@@ -20,6 +20,7 @@ async function data({ method, col, id, body, user }) {
   if (!user) return json(401, { error: 'sign_in_required' });
   if (!validCol(col)) return json(404, { error: 'unknown_collection' });
   if (id !== undefined && id !== null && id !== '' && !validId(id)) return json(400, { error: 'bad_id' });
+  if (col === 'letters') return json(403, { error: 'not_available' });
   if (col === 'messages' && method !== 'GET') return json(403, { error: 'messages_are_read_only' });
   const store = getStore();
   if (!store) return json(503, { error: 'database_not_configured' });
