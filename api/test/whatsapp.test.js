@@ -113,3 +113,33 @@ test('release without WhatsApp keys still registers the candidate', async () => 
   assert.equal(r.jsonBody.sent, false);
   assert.equal(r.jsonBody.reason, 'whatsapp_not_configured');
 });
+
+test('HR sends a prepared touchpoint: buttons + offer letter, letter first', async () => {
+  setEnv(); mockFetch(); sent.length = 0;
+  const r = await handlers.waPush({ user, body: { candidateId: 'wa-919810000000', touchpoint: 'Documents and KYC', items: [
+    { type: 'text', text: 'Next, I need a few documents.\n• PAN\n• Aadhaar', buttons: ['Send Aadhaar photo', "I'll use the link"] },
+    { type: 'letter', filename: 'Offer_Letter_Ritika.pdf', pdfBase64: Buffer.from('%PDF-1.4 regenerated '.repeat(10)).toString('base64') }
+  ] } });
+  assert.equal(r.status, 200);
+  assert.equal(r.jsonBody.sent, 2);
+  assert.equal(sent[0].type, 'interactive');
+  assert.equal(sent[0].interactive.action.buttons.length, 2);
+  assert.equal(sent[0].interactive.action.buttons[0].reply.title, 'Send Aadhaar photo');
+  assert.equal(sent[1].type, 'document');
+  const cand = (await getStore().get('candidates', 'wa-919810000000')).data;
+  assert.equal(cand.stage, 'Documents and KYC');
+});
+
+test('sending after the 24-hour window explains the problem', async () => {
+  setEnv(); sent.length = 0;
+  global.fetch = async () => ({ ok: false, status: 400, json: async () => ({ error: { message: 'Re-engagement message', code: 131047 } }) });
+  const r = await handlers.waPush({ user, body: { candidateId: 'wa-919810000000', items: [{ type: 'text', text: 'Reminder' }] } });
+  assert.equal(r.status, 409);
+  assert.equal(r.jsonBody.error, 'window_closed');
+});
+
+test('push needs a registered candidate', async () => {
+  setEnv(); mockFetch();
+  const r = await handlers.waPush({ user, body: { candidateId: 'wa-910000000000', items: [{ type: 'text', text: 'Hi' }] } });
+  assert.equal(r.status, 404);
+});

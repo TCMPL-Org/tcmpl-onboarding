@@ -108,7 +108,8 @@ async function handleInbound(m) {
   if (out.callback) handovers.push({ why: 'Call-back requested: ' + out.callback, at: now, open: true });
   await store.put('candidates', candidateId, Object.assign({}, cand, {
     risk, riskScore: Math.min(100, risk.reduce((a, r) => a + (r.weight || 0), 0)), handovers,
-    lastMessageAt: now, lastInboundAt: now, name: cand.name || m.name || '', letterSent
+    lastMessageAt: now, lastInboundAt: now, name: cand.name || m.name || '', letterSent,
+    stage: /^\s*(yes,? and )?i? ?accept/i.test(text) ? 'Offer accepted' : cand.stage
   }), SYSTEM);
 }
 
@@ -131,4 +132,51 @@ async function sendManual(p, user) {
   }
 }
 
-module.exports = { startForOffer, handleInbound, sendManual };
+// HR sends a prepared journey touchpoint (or the offer letter again) from the app.
+// items: [{type:'text', text, buttons?:[..]}, {type:'letter', pdfBase64?, filename?}]
+async function pushItems(p, user) {
+  const store = getStore();
+  if (!store) return { status: 503, body: { error: 'database_not_configured' } };
+  if (!wa.waConfigured()) return { status: 503, body: { error: 'whatsapp_not_configured' } };
+  const candidateId = str(p && p.candidateId, 40);
+  if (!/^wa-\d{11,15}$/.test(candidateId)) return { status: 400, body: { error: 'candidate_required' } };
+  const items = Array.isArray(p.items) ? p.items.slice(0, 10) : [];
+  if (!items.length) return { status: 400, body: { error: 'nothing_to_send' } };
+  const rec = await store.get('candidates', candidateId);
+  if (!rec) return { status: 404, body: { error: 'candidate_not_found' } };
+  const cand = Object.assign({}, rec.data);
+  const label = str(p.touchpoint, 120);
+  let sent = 0;
+  for (const it of items) {
+    try {
+      if (it && it.type === 'letter') {
+        if (typeof it.pdfBase64 === 'string' && it.pdfBase64.length > 100 && it.pdfBase64.length < 7000000) {
+          cand.letterFile = str(it.filename, 150) || cand.letterFile || 'Offer_Letter.pdf';
+          cand.letterMediaId = await wa.uploadMedia(Buffer.from(it.pdfBase64, 'base64'), 'application/pdf', cand.letterFile);
+        }
+        if (!cand.letterMediaId) return { status: 400, body: { sent, error: 'no_offer_letter' } };
+        const caption = `Your offer letter from ${cand.company || cand.clientLabel || 'us'}.`;
+        const r = await wa.sendDocument(cand.phone, cand.letterMediaId, cand.letterFile, caption);
+        cand.letterSent = true;
+        await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: `[Offer letter PDF] ${caption}`, waId: r.id || '', by: user.name, source: 'journey', touchpoint: label, kind: 'document' }, user);
+      } else if (it && it.type === 'text' && typeof it.text === 'string' && it.text.trim()) {
+        const text = it.text.trim().slice(0, 4000);
+        const buttons = Array.isArray(it.buttons) ? it.buttons.filter(b => typeof b === 'string' && b.trim()).slice(0, 3) : [];
+        const r = buttons.length && text.length <= 1024 ? await wa.sendButtons(cand.phone, text, buttons) : await wa.sendText(cand.phone, text);
+        await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: buttons.length ? `${text}\n[Buttons: ${buttons.join(' | ')}]` : text, waId: r.id || '', by: user.name, source: 'journey', touchpoint: label, kind: buttons.length ? 'interactive' : 'text' }, user);
+      } else continue;
+      sent++;
+    } catch (e) {
+      const code = e.detail && e.detail.code;
+      // 131047: more than 24 hours since the candidate last wrote; only templates are allowed.
+      const windowClosed = code === 131047 || /24 hours|re-engagement/i.test(e.message || '');
+      return { status: windowClosed ? 409 : 502, body: { sent, error: windowClosed ? 'window_closed' : 'whatsapp_send_failed', detail: e.message } };
+    }
+  }
+  cand.lastMessageAt = new Date().toISOString();
+  if (label) cand.stage = label;
+  await store.put('candidates', candidateId, cand, user);
+  return { status: 200, body: { sent } };
+}
+
+module.exports = { startForOffer, handleInbound, sendManual, pushItems };

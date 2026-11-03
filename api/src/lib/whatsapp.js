@@ -120,4 +120,10 @@ async function sendDocument(to, mediaId, filename, caption) {
   return graph({ to: normalizePhone(to), type: 'document', document: { id: mediaId, filename: String(filename || 'Offer_Letter.pdf').slice(0, 200), caption: String(caption || '').slice(0, 1000) } });
 }
 
-module.exports = { uploadMedia, sendDocument, waConfigured, webhookConfigured, normalizePhone, candidateIdFor, verifySignature, parseInbound, sendText, sendTemplate };
+// Text with up to 3 tappable reply buttons (WhatsApp limit: 3 buttons, 20 characters each).
+async function sendButtons(to, text, titles) {
+  const buttons = (titles || []).slice(0, 3).map((t, i) => ({ type: 'reply', reply: { id: 'b' + i, title: String(t).slice(0, 20) } }));
+  return graph({ to: normalizePhone(to), type: 'interactive', interactive: { type: 'button', body: { text: String(text).slice(0, 1024) }, action: { buttons } } });
+}
+
+module.exports = { sendButtons, uploadMedia, sendDocument, waConfigured, webhookConfigured, normalizePhone, candidateIdFor, verifySignature, parseInbound, sendText, sendTemplate };

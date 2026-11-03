@@ -30,7 +30,7 @@ async function loadHealth() {
 }
 
 /* ---------- called by the Offer desk ---------- */
-window.tcmplWA = {
+window.tcmplWA = Object.assign(window.tcmplWA || {}, {
   async start(payload) {
     const h = await loadHealth();
     if (!h.db) return; // backend not connected (e.g. local preview)
@@ -45,6 +45,123 @@ window.tcmplWA = {
     else if (r.body && r.body.error === 'valid_mobile_required') toast('WhatsApp not sent: add a valid mobile number for the candidate.');
     else toast('WhatsApp could not be sent. Check the WhatsApp tab for details.');
   }
+});
+
+
+/* ---------- sending prepared journey touchpoints ---------- */
+function candId(mobile) {
+  let d = String(mobile || '').replace(/\D+/g, '');
+  if (d.startsWith('00')) d = d.slice(2);
+  if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+  if (d.length === 10) d = '91' + d;
+  return d.length >= 11 && d.length <= 15 ? 'wa-' + d : '';
+}
+
+// Turns an agent chat bubble into WhatsApp text (*bold*, bullets, table rows as "Label: value").
+function toWaText(el) {
+  const out = [];
+  const walk = (n) => {
+    if (n.nodeType === 3) { out.push(n.nodeValue.replace(/\s+/g, ' ')); return; }
+    if (n.nodeType !== 1) return;
+    const tag = n.tagName;
+    if (n.classList.contains('meta')) return;
+    if (tag === 'BR') { out.push('\n'); return; }
+    if (tag === 'B' || tag === 'STRONG') { out.push('*' + n.textContent.trim() + '*'); return; }
+    if (tag === 'TR') { const c = [...n.children].map(td => td.textContent.trim()).filter(Boolean); out.push(c.join(': ') + '\n'); return; }
+    if (tag === 'LI') { out.push('• '); n.childNodes.forEach(walk); out.push('\n'); return; }
+    if (tag === 'A' && n.getAttribute('href') && /^https?:/.test(n.getAttribute('href'))) { out.push((n.textContent.trim() || 'Link') + ': ' + n.getAttribute('href') + '\n'); return; }
+    n.childNodes.forEach(walk);
+    if (tag === 'P' || tag === 'DIV' || tag === 'UL' || tag === 'OL' || tag === 'TABLE') out.push('\n');
+  };
+  walk(el);
+  return out.join('').replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function blobToBase64(blob) {
+  return new Promise(res => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1] || ''); fr.onerror = () => res(''); fr.readAsDataURL(blob); });
+}
+
+// Collects the current touchpoint's agent messages (stops at the first simulated candidate reply).
+async function collectTouchpoint() {
+  const box = $('#msgs');
+  if (!box) return { items: [], skipped: 0 };
+  const start = Math.min(window.tcmplTpStart || 0, box.children.length);
+  const items = []; let skipped = 0;
+  for (const n of [...box.children].slice(start)) {
+    if (n.classList.contains('b') && n.classList.contains('out')) break;
+    if (n.classList.contains('b') && n.classList.contains('in')) { const t = toWaText(n); if (t) items.push({ type: 'text', text: t }); continue; }
+    if (n.classList.contains('qr')) {
+      const titles = [...n.querySelectorAll('button')].map(b => b.textContent.trim()).filter(Boolean);
+      const last = items[items.length - 1];
+      if (last && last.type === 'text' && titles.length) {
+        if (titles.length <= 3 && titles.every(t => t.length <= 20)) last.buttons = titles;
+        else last.text += '\n\nReply with: ' + titles.join(' / ');
+      }
+      continue;
+    }
+    if (n.classList.contains('doc')) {
+      const nm = (n.querySelector('.nm') || n).textContent.trim();
+      if (/offer_letter/i.test(nm)) {
+        const pdf = window.tcmplLetterPdf && window.tcmplLetterPdf();
+        const it = { type: 'letter', filename: nm };
+        if (pdf && pdf.blob instanceof Blob) it.pdfBase64 = await blobToBase64(pdf.blob);
+        items.push(it);
+      } else skipped++;
+      continue;
+    }
+  }
+  // Send the letter first, then the message that talks about it.
+  items.sort((a, b) => (a.type === 'letter' ? -1 : 0) - (b.type === 'letter' ? -1 : 0));
+  return { items, skipped };
+}
+
+async function push(candidateId, items, touchpoint) {
+  return getJson('/api/wa/push', { method: 'POST', body: JSON.stringify({ candidateId, items, touchpoint }) }).catch(() => ({ ok: false, body: null }));
+}
+
+function explain(r) {
+  const e = r.body && r.body.error;
+  if (e === 'window_closed') return 'Not sent: the candidate has not written on WhatsApp in the last 24 hours. Ask them to reply once (e.g. "Hi"), then send again.';
+  if (e === 'candidate_not_found') return 'Not sent: release this offer first so the candidate is registered for WhatsApp.';
+  if (e === 'no_offer_letter') return 'Not sent: no offer letter PDF available. Open the Offer desk for this candidate and try again.';
+  if (e === 'whatsapp_not_configured') return 'WhatsApp is not connected yet.';
+  return 'Not sent' + (r.body && r.body.detail ? ': ' + r.body.detail : '. Please try again.');
+}
+
+async function sendCurrentTouchpoint(quiet) {
+  const c = window.tcmplCurrent && window.tcmplCurrent();
+  const id = c && candId(c.mobile);
+  if (!id) { if (!quiet) toast('This candidate has no valid WhatsApp number.'); return; }
+  const { items, skipped } = await collectTouchpoint();
+  if (!items.length) { if (!quiet) toast('Nothing to send for this touchpoint.'); return; }
+  const tp = (window.tcmplTouchpoint && window.tcmplTouchpoint()) || '';
+  const btn = $('#waSendTp'); if (btn) btn.disabled = true;
+  const r = await push(id, items, tp);
+  if (btn) btn.disabled = false;
+  if (r.ok) toast(`Sent on WhatsApp to ${c.name}: ${r.body.sent} message${r.body.sent === 1 ? '' : 's'}${tp ? ' (' + tp + ')' : ''}${skipped ? `. ${skipped} attachment(s) are demo-only and were not sent.` : '.'}`);
+  else toast(explain(r));
+}
+
+async function mountJourneyControls() {
+  if ($('#waSendTp')) return true;
+  const chip = $('#aiChip');
+  if (!chip) return false;
+  const h = await loadHealth();
+  if (!h.whatsapp || $('#waSendTp')) return true;
+  const wrap = document.createElement('span');
+  wrap.className = 'row';
+  wrap.style.gap = '8px';
+  wrap.innerHTML = `<button class="btn small primary" id="waSendTp" type="button" title="Send this touchpoint's messages to the candidate's real WhatsApp">Send this touchpoint on WhatsApp</button>
+    <label class="note" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="waAuto"> Auto-send each next touchpoint</label>`;
+  chip.after(wrap);
+  $('#waSendTp').onclick = () => sendCurrentTouchpoint(false);
+  return true;
+}
+
+window.tcmplWA = window.tcmplWA || {};
+window.tcmplWA.onTouchpoint = () => {
+  const auto = $('#waAuto');
+  if (auto && auto.checked) setTimeout(() => sendCurrentTouchpoint(true), 400);
 };
 
 /* ---------- tab ---------- */
@@ -61,9 +178,9 @@ function mount() {
   sec.className = 'tab'; sec.id = 'tab-wa'; sec.hidden = true;
   sec.innerHTML = `
   <div class="intro"><div><h2>WhatsApp inbox</h2><p>Live conversations between the agent and candidates on WhatsApp. The agent answers automatically; reply here when a person needs to step in.</p></div>
-    <div class="row"><span class="chip" id="waState">Checking…</span><button class="btn small" id="waRefresh">Refresh</button></div></div>
-  <div class="grid2" style="grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr)">
-    <div class="card"><h3 style="margin-bottom:8px">Candidates</h3><div id="waList" class="log"><div class="note">No WhatsApp conversations yet. Release an offer for a candidate with a valid mobile number.</div></div></div>
+    <div class="row"><span class="chip" id="waState">Checking…</span><button class="btn small" id="waLetter" type="button">Send offer letter again</button><button class="btn small" id="waRefresh">Refresh</button></div></div>
+  <div class="grid2" style="grid-template-columns:minmax(260px,.9fr) minmax(0,1.1fr)">
+    <div class="card"><h3 style="margin-bottom:8px">Candidates</h3><div id="waList"><div class="note">No WhatsApp conversations yet. Release an offer for a candidate with a valid mobile number.</div></div></div>
     <div>
       <div class="phone">
         <div class="phead"><div class="avatar" id="waAvatar">WA</div><div><div class="t" id="waName">Select a candidate</div><div class="s" id="waSub">WhatsApp Business</div></div></div>
@@ -90,6 +207,16 @@ function mount() {
   nav.querySelectorAll('button').forEach(b => { if (b !== btn) b.addEventListener('click', () => { btn.setAttribute('aria-selected', 'false'); sec.hidden = true; }); });
 
   $('#waRefresh').onclick = () => refresh(true);
+  $('#waLetter').onclick = async () => {
+    if (!selected) { toast('Select a candidate first.'); return; }
+    const item = { type: 'letter' };
+    const cur = window.tcmplCurrent && window.tcmplCurrent();
+    const pdf = window.tcmplLetterPdf && window.tcmplLetterPdf();
+    // Attach a freshly generated letter when the Offer desk has this candidate open.
+    if (cur && candId(cur.mobile) === selected && pdf && pdf.blob instanceof Blob) { item.pdfBase64 = await blobToBase64(pdf.blob); item.filename = pdf.name; }
+    const r = await push(selected, [item], 'Offer letter resent');
+    if (r.ok) { toast('Offer letter sent on WhatsApp.'); refresh(true); } else toast(explain(r));
+  };
   $('#waForm').onsubmit = async e => {
     e.preventDefault();
     const text = $('#waText').value.trim();
@@ -154,7 +281,7 @@ async function refresh(force) {
 
 // The app renders its markup first; mount once the tabs exist.
 (function waitForApp(n) {
-  if (mount()) return;
+  if (mount()) { mountJourneyControls(); return; }
   if (n > 100) return;
   setTimeout(() => waitForApp(n + 1), 100);
 })(0);

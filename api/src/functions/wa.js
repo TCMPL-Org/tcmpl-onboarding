@@ -6,6 +6,7 @@ const { getUser } = require('../lib/auth');
 // Signed-in HR actions:
 //   POST /api/wa/start  { offer + candidate details + facts }  -> register candidate, send opening template
 //   POST /api/wa/send   { candidateId, text }                   -> manual reply from the inbox
+//   POST /api/wa/push   { candidateId, touchpoint, items }      -> send a prepared journey touchpoint / offer letter
 app.http('wa', {
   methods: ['POST'],
   authLevel: 'anonymous', // access is enforced by Static Web Apps sign-in + getUser()
@@ -16,6 +17,7 @@ app.http('wa', {
     const user = getUser(request.headers);
     if (request.params.action === 'start') return handlers.waStart({ body, user });
     if (request.params.action === 'send') return handlers.waSend({ body, user });
+    if (request.params.action === 'push') return handlers.waPush({ body, user });
     return { status: 404, jsonBody: { error: 'unknown_action' } };
   }
 });

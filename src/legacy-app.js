@@ -475,7 +475,7 @@ const TP={
   m_prep:{t:'Manager: prepare Day 1',k:'m'}, m_prep2:{t:'Manager: final Day-1 check',k:'m'}, m_1on1:{t:'Manager: first 1:1 reminder',k:'m'}, m_goals:{t:'Manager: agree goals',k:'m'}, m_prob:{t:'Manager: probation heads-up',k:'m'},
   it_15:{t:'IT, Admin, Security: request',k:'s'}, it_7:{t:'IT, Admin, Security: reminder',k:'s'}, it_2:{t:'Readiness check and escalation',k:'s'}, ann:{t:'Joining announcement draft',k:'s'}, stat:{t:'PF, ESI and insurance enrolment',k:'s'}
 };
-let S=null;
+let S=null; window.tcmplCurrent=()=>S&&S.c; window.tcmplTouchpoint=()=>S&&S.plan&&S.plan[S.idx]?tpInfo(S.plan[S.idx].key).t:''; window.tcmplLetterPdf=()=>{ try{ return lastOffer?{blob:letterPdfBlob(),name:letterFile()+'.pdf'}:null; }catch(e){ return null; } };
 function parseOff(code,gap){ const m=/^([OD])([+-]\d+)$/.exec(code||''); if(!m) return null; const n=+m[2]; return m[1]==='O'?n:gap+n; }
 function buildPlan(){
   const gap=Math.max(3,Math.round((S.c.doj-OFFER_DATE)/DAY)); S.gap=gap;
@@ -511,7 +511,9 @@ function nextTouch(){
   S.idx++; const tp=S.plan[S.idx];
   if(tp.abs!==S.lastDay){ sep(`${fmtShort(dateOf(tp.abs))} · ${relLabel(tp.abs)}`); S.lastDay=tp.abs; }
   updateClock(); renderTimeline(); ageCallbacks();
+  window.tcmplTpStart=$('#msgs').children.length;
   (RUN[tp.key]||runCustom)(tp); renderBrain();
+  if(window.tcmplWA&&window.tcmplWA.onTouchpoint){ try{ window.tcmplWA.onTouchpoint(tpInfo(tp.key).t); }catch(e){ console.warn(e); } }
 }
 /* chat primitives */
 const msgs=$('#msgs');
