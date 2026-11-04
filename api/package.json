@@ -4,10 +4,16 @@
   "private": true,
   "type": "commonjs",
   "main": "src/functions/*.js",
-  "engines": { "node": ">=20" },
-  "scripts": { "test": "node --test test/*.test.js" },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
   "dependencies": {
     "@azure/cosmos": "^4.10.1",
-    "@azure/functions": "^4.17.0"
+    "@azure/functions": "^4.17.0",
+    "@azure/storage-blob": "^12.34.0",
+    "jimp": "^1.6.1"
   }
 }

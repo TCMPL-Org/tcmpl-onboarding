@@ -169,3 +169,22 @@ test('saved letters cannot be read from the browser', async () => {
   const r = await handlers.data({ method: 'GET', col: 'letters', user });
   assert.equal(r.status, 403);
 });
+
+test('opening template carries the offer letter PDF and the candidate details (no "Hi" needed)', async () => {
+  setEnv(); mockFetch(); sent.length = 0;
+  Object.assign(process.env, { WHATSAPP_TEMPLATE: 'offer_letter_ready', WHATSAPP_TEMPLATE_LANG: 'en', WHATSAPP_TEMPLATE_PARAMS: 'first,company,role,doj', WHATSAPP_TEMPLATE_HEADER: 'document' });
+  try {
+    const r = await handlers.waStart({ user, body: { name: 'Rahul Nair', mobile: '9810000077', role: 'Senior Executive, Finance', company: 'Northpeak Logistics', doj: '2026-12-01', letterPdfBase64: Buffer.from('%PDF-1.4 rahul '.repeat(12)).toString('base64'), letterFile: 'Offer_Letter_Rahul_Nair.pdf' } });
+    assert.equal(r.status, 200);
+    const t = sent[0].template;
+    assert.equal(t.name, 'offer_letter_ready');
+    assert.equal(t.language.code, 'en');
+    assert.equal(t.components[0].type, 'header');
+    assert.equal(t.components[0].parameters[0].document.filename, 'Offer_Letter_Rahul_Nair.pdf');
+    assert.deepEqual(t.components[1].parameters.map(p => p.text), ['Rahul', 'Northpeak Logistics', 'Senior Executive, Finance', '01 Dec 2026']);
+    const cand = (await getStore().get('candidates', 'wa-919810000077')).data;
+    assert.equal(cand.letterSent, true);
+  } finally {
+    for (const k of ['WHATSAPP_TEMPLATE', 'WHATSAPP_TEMPLATE_LANG', 'WHATSAPP_TEMPLATE_PARAMS', 'WHATSAPP_TEMPLATE_HEADER']) delete process.env[k];
+  }
+});

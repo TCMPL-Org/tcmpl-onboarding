@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const { getStore } = require('./store');
 const wa = require('./whatsapp');
 const agent = require('./agent');
+const documents = require('./documents');
 
 const SYSTEM = { name: 'onboarding-agent' };
 
@@ -28,6 +29,12 @@ async function saveMessage(store, id, m, user) {
 }
 
 function str(v, max) { return typeof v === 'string' ? v.slice(0, max) : ''; }
+
+function niceDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+  if (!m) return iso || '';
+  return `${m[3]} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][+m[2] - 1]} ${m[1]}`;
+}
 
 const MAX_PDF_B64 = 1300000; // ~1 MB PDF; fits in one database record
 const MEDIA_MAX_AGE_MS = 25 * 24 * 3600 * 1000; // WhatsApp keeps uploaded media for 30 days
@@ -89,8 +96,11 @@ async function startForOffer(p, user) {
   await store.put('candidates', candidateId, cand, user);
   if (!wa.waConfigured()) return { status: 200, body: { candidateId, sent: false, reason: 'whatsapp_not_configured' } };
   try {
-    const sent = await wa.sendTemplate(phone, { first: cand.first, name: cand.name, company: cand.company || cand.clientLabel, role: cand.role, doj: cand.doj, agent: cand.agentName });
-    await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: `[Template: ${sent.template}]`, waId: sent.id || '', by: user.name, kind: 'template' }, user);
+    const doc = wa.templateWantsDocument() ? { id: await letterMedia(store, candidateId, cand), filename: cand.letterFile } : null;
+    const sent = await wa.sendTemplate(phone, { first: cand.first, name: cand.name, company: cand.company || cand.clientLabel, role: cand.role, doj: niceDate(cand.doj), agent: cand.agentName }, doc);
+    if (sent.withDocument) { cand.letterSent = true; }
+    await store.put('candidates', candidateId, cand, user);
+    await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: `[Template: ${sent.template}]${sent.withDocument ? ' with offer letter PDF' : ''}`, waId: sent.id || '', by: user.name, kind: 'template' }, user);
     return { status: 200, body: { candidateId, sent: true } };
   } catch (e) {
     await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: '[Template not sent]', error: e.message, kind: 'template' }, user);
@@ -108,8 +118,23 @@ async function handleInbound(m) {
   const rec = await store.get('candidates', candidateId);
   const cand = rec ? rec.data : { phone: wa.normalizePhone(m.from), name: m.name || '', first: (m.name || '').split(' ')[0], stage: 'Unknown contact', risk: [], riskScore: 0, handovers: [] };
   const who = { name: 'whatsapp:' + cand.phone };
-  const text = m.text || `[${m.type || 'message'} received]`;
+  const text = m.media ? `[${m.type === 'image' ? 'Photo' : 'File'}${m.media.filename ? ': ' + m.media.filename : ''}]${m.text ? ' ' + m.text : ''}` : (m.text || `[${m.type || 'message'} received]`);
   await saveMessage(store, id, { candidateId, direction: 'in', text, waId: m.id || '', kind: m.type || 'text' }, who);
+
+  // Documents (photos, PDFs, consent and confirmation replies) are handled before the agent.
+  if (rec) {
+    const d = await documents.onInbound(store, candidateId, cand, m);
+    if (d.handled) {
+      for (const r of d.replies) {
+        let rid = '', rerr = '';
+        try { rid = (r.buttons && r.buttons.length ? await wa.sendButtons(cand.phone, r.text, r.buttons) : await wa.sendText(cand.phone, r.text)).id || ''; } catch (e) { rerr = e.message; }
+        await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: r.buttons && r.buttons.length ? `${r.text}\n[Buttons: ${r.buttons.join(' | ')}]` : r.text, waId: rid, error: rerr, source: 'documents', kind: r.buttons ? 'interactive' : 'text' }, SYSTEM);
+      }
+      const now = new Date().toISOString();
+      await store.put('candidates', candidateId, Object.assign({}, cand, { lastMessageAt: now, lastInboundAt: now }), SYSTEM);
+      return;
+    }
+  }
 
   let out;
   if (!rec) {

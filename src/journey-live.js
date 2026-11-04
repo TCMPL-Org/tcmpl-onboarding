@@ -10,7 +10,7 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&a
 const POLL_MS = 5000;
 const DEMO_KEY = 'tcmpl-journey-demo';
 
-let cands = [], selected = null, plan = [], tpSel = null, preview = null, msgs = [], lastSig = '';
+let cands = [], selected = null, plan = [], tpSel = null, preview = null, msgs = [], lastSig = '', docs = [], docEdit = null, health = {};
 
 function fmtDate(iso) {
   if (!iso) return '';
@@ -70,12 +70,13 @@ function mount() {
     </div>
     <div class="jl-side">
       <div class="card jl-prev" id="jlPrev"><h3>Touchpoint</h3><p class="note">Click a touchpoint on the left to see its standard message and send it on WhatsApp.</p></div>
+      <div class="card jl-docs" style="margin-top:16px" id="jlDocs"></div>
       <div class="card" style="margin-top:16px" id="jlFacts"></div>
     </div>
   </div>
   <div id="jlDemoBar" class="card" style="padding:8px 14px;margin-bottom:12px;display:none"><label class="note" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="jlDemo2" checked> Demo mode: simulated journey for presentations. Untick to work with real candidates.</label></div>`;
   intro.after(wrap);
-  $('#jlCand').onchange = () => { selected = $('#jlCand').value; tpSel = null; preview = null; lastSig = ''; renderAll(); loadMsgs(true); };
+  $('#jlCand').onchange = () => { selected = $('#jlCand').value; tpSel = null; preview = null; lastSig = ''; docs = []; docEdit = null; renderAll(); loadMsgs(true); loadDocs(); };
   $('#jlRefresh').onclick = () => reload(selected);
   $('#jlDemo').onchange = () => setDemo($('#jlDemo').checked);
   $('#jlDemo2').onchange = () => setDemo($('#jlDemo2').checked);
@@ -113,6 +114,7 @@ function applyMode() {
 async function reload(want) {
   const u = U(); if (!u) return;
   const h = await u.loadHealth();
+  health = h || {};
   if (!h.db) { cands = []; renderAll(); return; }
   const r = await u.getJson('/api/data/candidates').catch(() => ({ ok: false }));
   if (!r.ok) return;
@@ -123,6 +125,16 @@ async function reload(want) {
   if (!cands.some(c => c.id === selected)) { selected = cands[0] ? cands[0].id : null; tpSel = null; preview = null; }
   renderAll();
   loadMsgs(true);
+  loadDocs();
+}
+
+async function loadDocs() {
+  const u = U(); if (!u || !selected) { docs = []; renderDocs(); return; }
+  const want = selected;
+  const r = await u.getJson('/api/data/documents').catch(() => ({ ok: false }));
+  if (!r.ok || want !== selected) return;
+  docs = (r.body.items || []).map(i => i.data).filter(d => d && d.candidateId === selected);
+  renderDocs();
 }
 
 async function loadMsgs(force) {
@@ -135,7 +147,7 @@ async function loadMsgs(force) {
   lastSig = sig;
   renderChat();
   // new inbound messages may have changed stage / risk / window
-  if (!force) { const r2 = await u.getJson('/api/data/candidates/' + encodeURIComponent(selected)).catch(() => ({ ok: false })); if (r2.ok) { const i = cands.findIndex(c => c.id === selected); if (i >= 0) { cands[i] = Object.assign({ id: selected }, r2.body.data); renderHeader(); renderFacts(); renderTps(); } } }
+  if (!force) { const r2 = await u.getJson('/api/data/candidates/' + encodeURIComponent(selected)).catch(() => ({ ok: false })); if (r2.ok) { const i = cands.findIndex(c => c.id === selected); if (i >= 0) { cands[i] = Object.assign({ id: selected }, r2.body.data); renderHeader(); renderFacts(); renderTps(); } } loadDocs(); }
 }
 
 /* ---------- rendering ---------- */
@@ -151,7 +163,7 @@ function renderAll() {
   ['#jlLetter', '#jlCand'].forEach(q => { $(q).disabled = none; });
   const c = current();
   plan = c && window.tcmplPlanFor ? (() => { try { return window.tcmplPlanFor(profileOf(c)); } catch (e) { console.warn(e); return []; } })() : [];
-  renderHeader(); renderTps(); renderPreview(); renderFacts(); renderChat();
+  renderHeader(); renderTps(); renderPreview(); renderDocs(); renderFacts(); renderChat();
 }
 
 function windowState(c) {
@@ -258,6 +270,83 @@ function renderChat() {
   box.innerHTML = msgs.map(m => `<div class="b ${m.direction === 'in' ? 'in' : 'out'}"><p style="white-space:pre-wrap;margin:0">${esc(m.text)}</p><span class="meta">${esc(f(m.at))}${esc(who(m))}${m.error ? ' · not delivered' : ''}</span></div>`).join('')
     || '<div class="note" style="padding:12px">No messages yet.</div>';
   box.scrollTop = box.scrollHeight;
+}
+
+
+/* ---------- documents ---------- */
+const DOC_TYPES = [
+  { type: 'aadhaar', label: 'Aadhaar card', fields: [['name', 'Name'], ['dob', 'Date of birth'], ['gender', 'Gender'], ['aadhaarLast4', 'Aadhaar (last 4)'], ['address', 'Address']] },
+  { type: 'pan', label: 'PAN card', fields: [['pan', 'PAN'], ['name', 'Name'], ['father', "Father's name"], ['dob', 'Date of birth']] },
+  { type: 'bank', label: 'Bank proof', fields: [['holder', 'Account holder'], ['accountLast4', 'Account (last 4)'], ['ifsc', 'IFSC'], ['bank', 'Bank']] }
+];
+const LOCKED = { aadhaarLast4: true, accountLast4: true };
+
+function docStatus(d) {
+  if (!d) return ['Not received', ''];
+  if (d.status === 'confirmed' && d.reviewedBy) return ['Approved by HR', 'ok'];
+  if (d.status === 'confirmed') return ['Confirmed by candidate', 'ok'];
+  if (d.status === 'needs_review') return ['Needs HR review', 'warn'];
+  if (d.status === 'rejected') return ['Rejected, ask again', 'bad'];
+  return ['Read, waiting for candidate', 'info'];
+}
+
+function renderDocs() {
+  const box = $('#jlDocs'); if (!box) return;
+  const c = current();
+  if (!c) { box.innerHTML = ''; return; }
+  const cd = c.docs || {};
+  const ready = health.ocr && health.storage;
+  const consent = cd.consentAt ? 'Consent given ' + esc(fmtTime(cd.consentAt)) : cd.declinedAt ? 'Candidate said "Not now" ' + esc(fmtTime(cd.declinedAt)) : cd.requestedAt ? 'Consent asked ' + esc(fmtTime(cd.requestedAt)) + ', not given yet' : 'Not asked yet';
+  const rows = DOC_TYPES.map(t => {
+    const d = docs.find(x => x.type === t.type);
+    const [st, cls] = docStatus(d);
+    let body = '';
+    if (d) {
+      const f = d.fields || {};
+      const editing = docEdit === t.type;
+      body += '<dl class="kv">' + t.fields.map(([k, lab]) => {
+        let v = f[k] || '';
+        if (k === 'dob' && v) v = fmtDate(v);
+        const low = (d.low || []).includes(k) ? ' <span class="chip warn" title="Hard to read">check</span>' : '';
+        return `<dt>${esc(lab)}</dt><dd>${editing && !LOCKED[k] ? `<input class="jl-docin" data-k="${esc(k)}" value="${esc(f[k] || '')}" aria-label="${esc(lab)}">` : (esc(v) || '<span class="note">not read</span>') + low}</dd>`;
+      }).join('') + (editing && t.type === 'bank' ? '<dt>Full account no.</dt><dd><input class="jl-docin" data-k="account" placeholder="Only if correcting it" aria-label="Full account number"></dd>' : '') + '</dl>';
+      body += '<ul class="jl-checks">' + (d.checks || []).map(ch => `<li class="${ch.ok ? 'ok' : 'bad'}">${ch.ok ? '✓' : '✗'} ${esc(ch.label)}</li>`).join('') + '</ul>';
+      if (d.candidateCorrection) body += `<p class="note"><b>Candidate says:</b> ${esc(d.candidateCorrection)}</p>`;
+      if (d.fileNote) body += `<p class="note">${esc(d.fileNote)}</p>`;
+      if (d.reviewedBy) body += `<p class="note">Reviewed by ${esc(d.reviewedBy)} ${esc(fmtTime(d.reviewedAt))}</p>`;
+      body += '<div class="row" style="gap:6px;margin-top:6px">' +
+        (d.fileStored ? `<a class="btn small" href="/api/docs/file?candidateId=${encodeURIComponent(c.id)}&type=${t.type}" target="_blank" rel="noopener">View file</a>` : '') +
+        (editing ? `<button class="btn primary small" data-act="save" data-t="${t.type}" type="button">Save and approve</button><button class="btn small" data-act="cancel" type="button">Cancel</button>`
+          : `<button class="btn small" data-act="approve" data-t="${t.type}" type="button">Approve</button><button class="btn small" data-act="edit" data-t="${t.type}" type="button">Edit</button><button class="btn small" data-act="reject" data-t="${t.type}" type="button">Reject</button>`) + '</div>';
+    }
+    return `<div class="jl-doc"><div class="jl-dochead"><b>${esc(t.label)}</b><span class="chip ${cls}">${esc(st)}</span></div>${body}</div>`;
+  }).join('');
+  box.innerHTML = `<div class="jl-dochead"><h3 style="margin:0">Documents</h3><button class="btn small primary" id="jlAskDocs" type="button" ${ready ? '' : 'disabled'}>Ask for documents</button></div>
+    <p class="note" style="margin:6px 0 10px">${ready ? consent : 'Document reading is not connected yet (needs DOCINTEL_ENDPOINT, DOCINTEL_KEY and STORAGE_CONNECTION_STRING).'}</p>${rows}`;
+  if ($('#jlAskDocs')) $('#jlAskDocs').onclick = askDocs;
+  box.querySelectorAll('button[data-act]').forEach(b => { b.onclick = () => docAction(b.dataset.act, b.dataset.t); });
+}
+
+async function askDocs() {
+  const c = current(); if (!c) return;
+  $('#jlAskDocs').disabled = true;
+  const r = await U().getJson('/api/docs/request', { method: 'POST', body: JSON.stringify({ candidateId: c.id }) }).catch(() => ({ ok: false }));
+  if ($('#jlAskDocs')) $('#jlAskDocs').disabled = false;
+  await afterSend(r, `Asked ${c.name} for documents on WhatsApp.`);
+}
+
+async function docAction(act, type) {
+  const c = current(); if (!c) return;
+  if (act === 'edit') { docEdit = type; renderDocs(); return; }
+  if (act === 'cancel') { docEdit = null; renderDocs(); return; }
+  const body = { candidateId: c.id, type, action: act === 'reject' ? 'reject' : 'approve' };
+  if (act === 'save') { body.fields = {}; document.querySelectorAll('#jlDocs .jl-docin').forEach(i => { if (i.value.trim()) body.fields[i.dataset.k] = i.value.trim(); }); }
+  if (act === 'reject') { const note = window.prompt('Why is this document rejected? (saved for the record)', 'Not clear'); if (note === null) return; body.note = note; }
+  const r = await U().getJson('/api/docs/review', { method: 'POST', body: JSON.stringify(body) }).catch(() => ({ ok: false }));
+  if (!r.ok) { U().toast('Not saved' + (r.body && r.body.error ? ': ' + r.body.error : '')); return; }
+  docEdit = null;
+  U().toast(act === 'reject' ? 'Rejected. Click "Ask for documents" to ask the candidate again.' : 'Approved.');
+  await reload(selected);
 }
 
 /* ---------- actions ---------- */

@@ -59,7 +59,13 @@ function parseInbound(body) {
           const i = m.interactive || {};
           text = (i.button_reply && i.button_reply.title) || (i.list_reply && i.list_reply.title) || '';
         }
-        out.push({ id: m.id, from: m.from, name: names[m.from] || '', type: m.type, text, timestamp: m.timestamp });
+        let media = null;
+        if (m.type === 'image' || m.type === 'document') {
+          const md = m[m.type] || {};
+          media = { id: md.id, mime: md.mime_type || '', filename: md.filename || '', caption: md.caption || '' };
+          text = md.caption || '';
+        }
+        out.push({ id: m.id, from: m.from, name: names[m.from] || '', type: m.type, text, media, timestamp: m.timestamp });
       }
     }
   }
@@ -90,17 +96,29 @@ async function sendText(to, text) {
   return graph({ to: normalizePhone(to), type: 'text', text: { preview_url: false, body: String(text).slice(0, 4000) } });
 }
 
-async function sendTemplate(to, values) {
-  const name = process.env.WHATSAPP_TEMPLATE || 'hello_world';
-  const lang = process.env.WHATSAPP_TEMPLATE_LANG || 'en_US';
+// Sends the opening template. Settings:
+//   WHATSAPP_TEMPLATE          template name (default hello_world)
+//   WHATSAPP_TEMPLATE_LANG     language code exactly as in WhatsApp Manager (e.g. en, en_US)
+//   WHATSAPP_TEMPLATE_PARAMS   body variables in order, from: first, name, company, role, doj, agent
+//   WHATSAPP_TEMPLATE_HEADER   "document" when the template's header is a document (the offer letter)
+async function sendTemplate(to, values, doc) {
+  const name = (process.env.WHATSAPP_TEMPLATE || 'hello_world').trim();
+  const lang = (process.env.WHATSAPP_TEMPLATE_LANG || 'en_US').trim();
   const keys = (process.env.WHATSAPP_TEMPLATE_PARAMS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const wantsDoc = /^document$/i.test((process.env.WHATSAPP_TEMPLATE_HEADER || '').trim());
   const template = { name, language: { code: lang } };
-  if (keys.length) {
-    template.components = [{ type: 'body', parameters: keys.map(k => ({ type: 'text', text: String((values && values[k]) || '-').slice(0, 200) })) }];
+  const components = [];
+  if (wantsDoc) {
+    if (!doc || !doc.id) { const e = new Error('The opening template needs the offer letter PDF, but none is available'); e.code = 'no_offer_letter'; throw e; }
+    components.push({ type: 'header', parameters: [{ type: 'document', document: { id: doc.id, filename: String(doc.filename || 'Offer_Letter.pdf').slice(0, 200) } }] });
   }
+  if (keys.length) components.push({ type: 'body', parameters: keys.map(k => ({ type: 'text', text: String((values && values[k]) || '-').slice(0, 200) })) });
+  if (components.length) template.components = components;
   const sent = await graph({ to: normalizePhone(to), type: 'template', template });
-  return Object.assign({ template: name }, sent);
+  return Object.assign({ template: name, withDocument: wantsDoc }, sent);
 }
+
+function templateWantsDocument() { return /^document$/i.test((process.env.WHATSAPP_TEMPLATE_HEADER || '').trim()); }
 
 async function uploadMedia(buffer, mime, filename) {
   const version = process.env.WHATSAPP_GRAPH_VERSION || 'v23.0';
@@ -126,4 +144,19 @@ async function sendButtons(to, text, titles) {
   return graph({ to: normalizePhone(to), type: 'interactive', interactive: { type: 'button', body: { text: String(text).slice(0, 1024) }, action: { buttons } } });
 }
 
-module.exports = { sendButtons, uploadMedia, sendDocument, waConfigured, webhookConfigured, normalizePhone, candidateIdFor, verifySignature, parseInbound, sendText, sendTemplate };
+// Downloads a file the candidate sent (Meta keeps it for about 30 days).
+async function downloadMedia(mediaId, maxBytes = 15000000) {
+  const version = process.env.WHATSAPP_GRAPH_VERSION || 'v23.0';
+  const auth = { authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` };
+  const meta = await fetch(`https://graph.facebook.com/${version}/${encodeURIComponent(mediaId)}`, { headers: auth, signal: AbortSignal.timeout(15000) });
+  const info = await meta.json().catch(() => ({}));
+  if (!meta.ok || !info.url) { const e = new Error((info.error && info.error.message) || `Media lookup returned ${meta.status}`); e.code = 'whatsapp_error'; throw e; }
+  if (info.file_size && info.file_size > maxBytes) { const e = new Error('File too large'); e.code = 'file_too_large'; throw e; }
+  const res = await fetch(info.url, { headers: auth, signal: AbortSignal.timeout(30000) });
+  if (!res.ok) { const e = new Error(`Media download returned ${res.status}`); e.code = 'whatsapp_error'; throw e; }
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (buffer.length > maxBytes) { const e = new Error('File too large'); e.code = 'file_too_large'; throw e; }
+  return { buffer, mime: info.mime_type || res.headers.get('content-type') || 'application/octet-stream' };
+}
+
+module.exports = { downloadMedia, templateWantsDocument, sendButtons, uploadMedia, sendDocument, waConfigured, webhookConfigured, normalizePhone, candidateIdFor, verifySignature, parseInbound, sendText, sendTemplate };
