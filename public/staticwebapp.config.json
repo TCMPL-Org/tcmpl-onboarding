@@ -7,6 +7,12 @@
       ]
     },
     {
+      "route": "/api/cron/tick",
+      "allowedRoles": [
+        "anonymous"
+      ]
+    },
+    {
       "route": "/privacy",
       "rewrite": "/privacy.html",
       "allowedRoles": [

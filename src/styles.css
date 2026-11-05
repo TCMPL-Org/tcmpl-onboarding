@@ -266,3 +266,16 @@ img{max-width:100%}body{margin:0}
 .jl-checks li.ok{color:var(--ok)}
 .jl-checks li.bad{color:var(--bad, #b42318)}
 .jl-docin{width:100%;box-sizing:border-box;font:inherit;font-size:.85rem;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:inherit}
+
+.fl-miss{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.fl-miss.ok{border-color:var(--ok)}
+.il-tbl{width:100%;border-collapse:collapse;font-size:.85rem}
+.il-tbl th{text-align:left;font-weight:600;padding:6px;border-bottom:1px solid var(--line);white-space:nowrap}
+.il-tbl td{padding:6px;border-bottom:1px solid var(--line);vertical-align:top}
+.il-tbl input,.il-tbl select,.il-tbl textarea{font:inherit;font-size:.85rem;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:inherit;box-sizing:border-box}
+.il-ck{display:flex;gap:6px;align-items:center;margin-top:4px;font-size:.8rem}
+.il-q{border-top:1px solid var(--line);padding:8px 0}
+.il-q input[type=text]{font:inherit;font-size:.85rem;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:inherit}
+.il-opt{display:flex;gap:6px;align-items:center;margin:4px 0 0 18px}
+.il-prog{width:100%;border-collapse:collapse;font-size:.85rem}
+.il-prog td{padding:6px 4px;border-bottom:1px solid var(--line);vertical-align:top}

@@ -10,6 +10,8 @@ const wa = require('./whatsapp');
 const agent = require('./agent');
 const documents = require('./documents');
 const profile = require('./profile');
+const induction = require('./induction');
+const inductionRun = require('./induction-run');
 
 const SYSTEM = { name: 'onboarding-agent' };
 
@@ -126,12 +128,9 @@ async function handleInbound(m) {
   if (rec) {
     let d = await documents.onInbound(store, candidateId, cand, m);
     if (!d.handled) d = profile.onInbound(cand, m);
+    if (!d.handled && cand.induction) d = induction.onInbound(cand, await inductionRun.planFor(store, cand.profile && cand.profile.client), m);
     if (d.handled) {
-      for (const r of d.replies) {
-        let rid = '', rerr = '';
-        try { rid = (r.buttons && r.buttons.length ? await wa.sendButtons(cand.phone, r.text, r.buttons) : await wa.sendText(cand.phone, r.text)).id || ''; } catch (e) { rerr = e.message; }
-        await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: r.buttons && r.buttons.length ? `${r.text}\n[Buttons: ${r.buttons.join(' | ')}]` : r.text, waId: rid, error: rerr, source: 'agent', kind: r.buttons ? 'interactive' : 'text' }, SYSTEM);
-      }
+      await inductionRun.deliver(store, candidateId, cand, d.replies, SYSTEM, '');
       const now = new Date().toISOString();
       await store.put('candidates', candidateId, Object.assign({}, cand, { lastMessageAt: now, lastInboundAt: now }), SYSTEM);
       return;
@@ -264,7 +263,7 @@ async function askDetails(p, user) {
   const candidateId = str(p && p.candidateId, 40);
   const cand = await loadCand(store, candidateId);
   if (!cand) return { status: 404, body: { error: 'candidate_not_found' } };
-  const q = profile.start(cand, { full: Boolean(p.full) });
+  const q = profile.start(cand, { full: Boolean(p.full), forms: Array.isArray(p.forms) ? p.forms.map(String).slice(0, 5) : undefined });
   if (!q) { await store.put('candidates', candidateId, cand, user); return { status: 200, body: { sent: 0, nothingMissing: true } }; }
   try {
     const r = q.buttons ? await wa.sendButtons(cand.phone, q.text, q.buttons) : await wa.sendText(cand.phone, q.text);
@@ -324,4 +323,13 @@ async function sendForms(p, user) {
   return { status: 200, body: { sent } };
 }
 
-module.exports = { startForOffer, handleInbound, sendManual, pushItems, askDetails, saveForms, sendForms };
+// Which WhatsApp questions each form still needs (shown on the per-form buttons).
+async function missingDetails(p) {
+  const store = getStore();
+  if (!store) return { status: 503, body: { error: 'database_not_configured' } };
+  const cand = await loadCand(store, str(p && p.candidateId, 40));
+  if (!cand) return { status: 404, body: { error: 'candidate_not_found' } };
+  return { status: 200, body: { missing: profile.missingByForm(cand), inProgress: Boolean(cand.details && cand.details.step) } };
+}
+
+module.exports = { startForOffer, handleInbound, sendManual, pushItems, askDetails, saveForms, sendForms, missingDetails };

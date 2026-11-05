@@ -11,7 +11,9 @@ const DEMO = '__demo';
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const SRCC = { 'Aadhaar scan': 'info', 'PAN scan': 'info', 'Bank proof scan': 'info', Offer: 'teal', 'Employer (client HR)': 'teal', 'Previous UAN record': 'info', 'Candidate (WhatsApp)': '', 'Candidate to fill': 'warn' };
 
-let cands = [], selected = DEMO, forms = [], fSel = 'f11', vals = {}, states = {}, editing = null, busy = false;
+let cands = [], selected = DEMO, forms = [], fSel = 'f11', vals = {}, states = {}, editing = null, busy = false, missingQ = null, inProgress = false;
+// What each WhatsApp question is about, in plain words.
+const QLABEL = { marital: 'marital status', maritalOther: 'marital status', spouse: "spouse's name", presConfirm: 'present address', presAddr: 'present address', permSame: 'permanent address', permAddr: 'permanent address', family: 'family members', livesWith: 'whether family lives with them', familyPlace: "family's town", nominees: 'nominees and shares', guardian: "minor nominee's guardian", prevEpf: 'previous PF membership', uan: 'UAN', prevPf: 'previous PF member ID', exitDate: 'last working day at previous job', prevEps: 'previous pension (EPS) membership', intl: 'international worker', religion: 'religion' };
 
 const nd = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); return m ? `${m[3]} ${MON[+m[2] - 1]} ${m[1]}` : (iso || ''); };
 const fmtTime = iso => iso ? new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
@@ -63,7 +65,7 @@ function mount() {
       <span class="chip" id="flDocs"></span><span class="chip" id="flDetails"></span><span class="chip" id="flStatus"></span>
     </div>
     <div class="row" id="flActions">
-      <button class="btn small" id="flAskDetails" type="button" title="The agent asks only what the forms are still missing">Ask missing details on WhatsApp</button>
+      <button class="btn small" id="flAskDetails" type="button" title="The agent asks only what the forms are still missing">Ask all missing details on WhatsApp</button>
       <button class="btn small teal" id="flSend" type="button">Send forms to candidate</button>
       <button class="btn small primary" id="flApprove" type="button">Approve forms</button>
       <button class="btn small" id="flRefresh" type="button">Refresh</button>
@@ -76,7 +78,7 @@ function mount() {
   sec.querySelector('.intro').after(bar);
   $('#flCand').onchange = () => { selected = $('#flCand').value; editing = null; load(); };
   $('#flRefresh').onclick = () => reload();
-  $('#flAskDetails').onclick = askDetails;
+  $('#flAskDetails').onclick = () => askDetails();
   $('#flSend').onclick = sendForms;
   $('#flApprove').onclick = approve;
   $('#flPdf').onclick = () => download([fSel]);
@@ -120,7 +122,16 @@ function load() {
   vals = Object.assign({}, c.forms && c.forms.vals);
   states = Object.assign({}, c.forms && c.forms.states);
   if (!forms.some(f => f.id === fSel && f.applies)) fSel = 'f11';
+  missingQ = null;
   renderHead(); renderList(); renderView();
+  loadMissing(c.id);
+}
+
+async function loadMissing(id) {
+  const r = await post('/api/forms/missing', { candidateId: id });
+  if (!r.ok || selected !== id) return;
+  missingQ = r.body.missing || {}; inProgress = Boolean(r.body.inProgress);
+  renderView();
 }
 
 /* ---------- values ---------- */
@@ -160,7 +171,14 @@ function renderView() {
   const c = current(), f = forms.find(x => x.id === fSel);
   if (!f) { $('#flView').innerHTML = ''; return; }
   const confirmed = c.forms && c.forms.candidateConfirmedAt;
-  let h = `<div class="gfhead"><div class="lbl">${esc(f.org)}</div><h3>${esc(f.title)}</h3><div>${esc(f.sub)}</div></div>`;
+  let h = '';
+  if (missingQ && missingQ[f.id]) {
+    const qs = [...new Set(missingQ[f.id].map(k => QLABEL[k] || k))];
+    h += qs.length
+      ? `<div class="callout fl-miss"><div><b>${esc(f.title)} still needs from the candidate:</b> ${esc(qs.join(', '))}.${inProgress ? ' <span class="note">(The candidate is answering questions on WhatsApp right now.)</span>' : ''}</div><button class="btn small teal" id="flAskForm" type="button">Ask missing details for this form</button></div>`
+      : `<div class="callout fl-miss ok"><b>Nothing missing from the candidate for ${esc(f.title)}.</b></div>`;
+  }
+  h += `<div class="gfhead"><div class="lbl">${esc(f.org)}</div><h3>${esc(f.title)}</h3><div>${esc(f.sub)}</div></div>`;
   f.sections.forEach(s => {
     h += `<div class="gfsec">${esc(s.h)}</div>`;
     (s.fields || []).forEach(fl => {
@@ -173,6 +191,7 @@ function renderView() {
     }
   });
   $('#flView').innerHTML = h;
+  if ($('#flAskForm')) $('#flAskForm').onclick = () => askDetails([f.id], f.title);
   document.querySelectorAll('#flView [data-edit]').forEach(b => { b.onclick = () => { editing = key(f.id, b.dataset.edit); renderView(); const e = $('#flEdit'); if (e) { e.focus(); e.select(); } }; });
   document.querySelectorAll('#flView [data-save]').forEach(b => { b.onclick = () => saveField(f, b.dataset.save); });
   const e = $('#flEdit'); if (e) e.onkeydown = ev => { if (ev.key === 'Enter') saveField(f, editing.split(':')[1]); if (ev.key === 'Escape') { editing = null; renderView(); } };
@@ -204,16 +223,18 @@ async function approve() {
   renderHead();
 }
 
-async function askDetails() {
+async function askDetails(scope, title) {
   const c = current(); if (!c || busy) return;
-  // The agent asks only what the forms are still missing; after a full set of answers HR can ask everything again.
+  const forOne = Array.isArray(scope) && scope.length;
+  // Only what is still missing; after a full set of answers HR can ask everything again.
   let full = false;
-  if (c.details && c.details.completedAt) { if (!window.confirm('This candidate has already answered everything the forms need. Ask all the questions again?')) return; full = true; }
+  if (!forOne && c.details && c.details.completedAt) { if (!window.confirm('This candidate has already answered everything the forms need. Ask all the questions again?')) return; full = true; }
+  if (inProgress && !window.confirm('The candidate is still answering questions on WhatsApp. Start again with these questions instead?')) return;
   busy = true; $('#flAskDetails').disabled = true;
-  const r = await post('/api/forms/details', { candidateId: c.id, full });
+  const r = await post('/api/forms/details', { candidateId: c.id, full, forms: forOne ? scope : undefined });
   busy = false; $('#flAskDetails').disabled = false;
-  if (r.ok && r.body.nothingMissing) { U().toast('Nothing is missing: the forms already have every detail.'); reload(); }
-  else if (r.ok) { U().toast(`Asked ${c.name} on WhatsApp for the details the forms still need.`); reload(); } else U().toast(U().explain(r));
+  if (r.ok && r.body.nothingMissing) { U().toast(`Nothing is missing${forOne ? ' for ' + title : ''}.`); reload(); }
+  else if (r.ok) { U().toast(`Asked ${c.name} on WhatsApp for the details ${forOne ? title : 'the forms'} still need${forOne ? 's' : ''}.`); reload(); } else U().toast(U().explain(r));
 }
 
 function footer(c) {

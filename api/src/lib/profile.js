@@ -72,52 +72,55 @@ const yes = t => /^(y|yes|haan|ha)\b/i.test(t);
 const no = t => /^(n|no|nahi|nope)\b/i.test(t);
 
 const STEPS = [
-  { key: 'marital', has: d => Boolean(d.marital) && d.marital !== 'Other', ask: () => ({ text: 'A few details for your joining forms (PF, ESIC, gratuity). It takes about 2 minutes.\n\nWhat is your marital status?', buttons: ['Single', 'Married', 'Other'] }),
+  { key: 'marital', forms: ['f11', 'f2a', 'esic', 'gf'], has: d => Boolean(d.marital) && d.marital !== 'Other', ask: () => ({ text: 'A few details for your joining forms (PF, ESIC, gratuity). It takes about 2 minutes.\n\nWhat is your marital status?', buttons: ['Single', 'Married', 'Other'] }),
     handle: (t, d) => { if (/^single|unmarried/i.test(t)) d.marital = 'Unmarried'; else if (/^married/i.test(t)) d.marital = 'Married'; else if (/^other/i.test(t)) d.marital = 'Other'; else if (/widow|divorc|separat/i.test(t)) d.marital = /widow/i.test(t) ? (/widower/i.test(t) ? 'Widower' : 'Widow') : /divorc/i.test(t) ? 'Divorced' : 'Separated'; else return 'Please tap Single, Married or Other.'; } },
-  { key: 'maritalOther', when: d => d.marital === 'Other', has: () => false, ask: () => ({ text: 'Please type one: *Widow*, *Widower*, *Divorced* or *Separated*.' }),
+  { key: 'maritalOther', forms: ['f11', 'f2a', 'esic', 'gf'], when: d => d.marital === 'Other', has: () => false, ask: () => ({ text: 'Please type one: *Widow*, *Widower*, *Divorced* or *Separated*.' }),
     handle: (t, d) => { const m = /widower|widow|divorced|separated/i.exec(t); if (!m) return 'Please type Widow, Widower, Divorced or Separated.'; d.marital = m[0][0].toUpperCase() + m[0].slice(1).toLowerCase(); } },
-  { key: 'spouse', when: d => d.marital === 'Married', has: d => Boolean(d.spouse), ask: () => ({ text: "What is your spouse's full name?" }),
+  { key: 'spouse', forms: ['f11', 'f2a', 'esic'], when: d => d.marital === 'Married', has: d => Boolean(d.spouse), ask: () => ({ text: "What is your spouse's full name?" }),
     handle: (t, d) => { const n = ocr.cleanName(t); if (n.split(' ').length < 1 || n.length < 3) return "Please type your spouse's full name."; d.spouse = n; } },
   // Address already read from the Aadhaar: just confirm it.
-  { key: 'presConfirm', when: (d, c) => Boolean(c.kyc && c.kyc.address), has: d => Boolean(d.presAddr) || d.presConfirmed === false,
+  { key: 'presConfirm', forms: ['f2a', 'esic', 'gf'], when: (d, c) => Boolean(c.kyc && c.kyc.address), has: d => Boolean(d.presAddr) || d.presConfirmed === false,
     ask: (d, c) => ({ text: `Is this your *present address* (where you live now)?\n\n${c.kyc.address}`, buttons: ['Yes', 'Different'] }),
     handle: (t, d, c) => { if (yes(t)) { d.presAddr = clean(c.kyc.address); d.presConfirmed = true; } else if (/^diff|^no/i.test(t)) d.presConfirmed = false; else return 'Please tap Yes or Different.'; } },
-  { key: 'presAddr', has: d => Boolean(d.presAddr), ask: () => ({ text: 'What is your *present address* (where you live now), with PIN code?' }),
+  { key: 'presAddr', forms: ['f2a', 'esic', 'gf'], has: d => Boolean(d.presAddr), ask: () => ({ text: 'What is your *present address* (where you live now), with PIN code?' }),
     handle: (t, d) => { if (t.length < 15 || !/\d{6}/.test(t)) return 'Please type the full address including the 6-digit PIN code.'; d.presAddr = clean(t); } },
-  { key: 'permSame', has: d => d.permSame === true || d.permSame === false, ask: () => ({ text: 'Is your *permanent address* the same?', buttons: ['Same address', 'Different'] }),
+  { key: 'permSame', forms: ['f2a', 'esic', 'gf'], has: d => d.permSame === true || d.permSame === false, ask: () => ({ text: 'Is your *permanent address* the same?', buttons: ['Same address', 'Different'] }),
     handle: (t, d) => { if (/^same|^yes/i.test(t)) d.permSame = true; else if (/^diff|^no/i.test(t)) d.permSame = false; else return 'Please tap Same address or Different.'; } },
-  { key: 'permAddr', when: d => d.permSame === false, has: d => Boolean(d.permAddr), ask: () => ({ text: 'Please type your permanent address, with PIN code.' }),
+  { key: 'permAddr', forms: ['f2a', 'esic', 'gf'], when: d => d.permSame === false, has: d => Boolean(d.permAddr), ask: () => ({ text: 'Please type your permanent address, with PIN code.' }),
     handle: (t, d) => { if (t.length < 15 || !/\d{6}/.test(t)) return 'Please type the full address including the 6-digit PIN code.'; d.permAddr = clean(t); } },
-  { key: 'family', has: d => (d.family || []).length > 0, ask: (d, c) => ({ text: `Please list your family members, *one per line*: name, relation, date of birth.\n\nFor example:\n${d.marital === 'Married' ? `${d.spouse || 'Priya Pawar'}, Spouse, 12/01/1996\n` : ''}Sunita Pawar, Mother, 05/05/1969\n\n${esicApplies(c) ? 'These are used for ESIC medical cover and PF/pension nomination.' : 'These are used for your PF and pension nomination.'}` }),
+  { key: 'family', forms: ['f2a', 'f2b', 'esic', 'gf'], has: d => (d.family || []).length > 0, ask: (d, c) => ({ text: `Please list your family members, *one per line*: name, relation, date of birth.\n\nFor example:\n${d.marital === 'Married' ? `${d.spouse || 'Priya Pawar'}, Spouse, 12/01/1996\n` : ''}Sunita Pawar, Mother, 05/05/1969\n\n${esicApplies(c) ? 'These are used for ESIC medical cover and PF/pension nomination.' : 'These are used for your PF and pension nomination.'}` }),
     handle: (t, d) => { const r = parseFamily(t); if (!r.family.length) return 'I couldn\'t read that. Please send one person per line like this:\nSunita Pawar, Mother, 05/05/1969'; if (r.bad.length) return `I couldn't read: "${clean(r.bad[0], 60)}". Please send the whole list again, one per line: name, relation, date of birth.`; d.family = r.family; } },
-  { key: 'livesWith', when: (d, c) => esicApplies(c) && (d.family || []).length > 0, has: d => d.livesWithAsked === true, ask: () => ({ text: 'Do all of them live with you?', buttons: ['Yes, all', 'No'] }),
+  { key: 'livesWith', forms: ['esic'], when: (d, c) => esicApplies(c) && (d.family || []).length > 0, has: d => d.livesWithAsked === true, ask: () => ({ text: 'Do all of them live with you?', buttons: ['Yes, all', 'No'] }),
     handle: (t, d) => { if (/^yes/i.test(t)) d.family.forEach(f => { f.livesWith = true; }); else if (/^no/i.test(t)) d.family.forEach(f => { f.livesWith = false; }); else return 'Please tap Yes, all or No.'; d.livesWithAsked = true; } },
-  { key: 'familyPlace', when: (d, c) => esicApplies(c) && (d.family || []).some(f => f.livesWith === false), has: d => Boolean(d.familyPlace), ask: () => ({ text: 'Where do they live? Type the town and state, e.g. *Nashik, Maharashtra*.' }),
+  { key: 'familyPlace', forms: ['esic'], when: (d, c) => esicApplies(c) && (d.family || []).some(f => f.livesWith === false), has: d => Boolean(d.familyPlace), ask: () => ({ text: 'Where do they live? Type the town and state, e.g. *Nashik, Maharashtra*.' }),
     handle: (t, d) => { if (t.length < 3) return 'Please type the town and state.'; d.familyPlace = clean(t, 120); } },
-  { key: 'nominees', has: d => (d.nominees || []).length > 0 && (d.nominees || []).every(n => (d.family || []).some(f => f.name === n.name)), ask: d => ({ text: 'Who should be your *nominee* for PF and gratuity?\n\nTap a name for 100%, or type names with shares, e.g. *Sunita Pawar 50%, Rahul Pawar 50%*.', buttons: (d.family || []).slice(0, 3).map(f => f.name.slice(0, 20)) }),
+  { key: 'nominees', forms: ['f2a', 'f2b', 'esic', 'gf'], has: d => (d.nominees || []).length > 0 && (d.nominees || []).every(n => (d.family || []).some(f => f.name === n.name)), ask: d => ({ text: 'Who should be your *nominee* for PF and gratuity?\n\nTap a name for 100%, or type names with shares, e.g. *Sunita Pawar 50%, Rahul Pawar 50%*.', buttons: (d.family || []).slice(0, 3).map(f => f.name.slice(0, 20)) }),
     handle: (t, d) => { const r = parseNominees(t, d.family || []); if (r.error) return r.error; d.nominees = r.nominees; } },
-  { key: 'guardian', when: d => (d.nominees || []).some(n => (ageOn(n.dob) ?? 99) < 18), has: d => Boolean(d.guardian), ask: () => ({ text: 'One of your nominees is under 18. Who is their guardian? Please type the full name.' }),
+  { key: 'guardian', forms: ['f2a', 'gf'], when: d => (d.nominees || []).some(n => (ageOn(n.dob) ?? 99) < 18), has: d => Boolean(d.guardian), ask: () => ({ text: 'One of your nominees is under 18. Who is their guardian? Please type the full name.' }),
     handle: (t, d) => { const n = ocr.cleanName(t); if (n.length < 3) return 'Please type the guardian\'s full name.'; d.guardian = n; } },
-  { key: 'prevEpf', has: d => Boolean(d.prevEpf), ask: () => ({ text: 'Did you have a *PF account (UAN)* with an earlier employer?', buttons: ['Yes', 'No'] }),
+  { key: 'prevEpf', forms: ['f11'], has: d => Boolean(d.prevEpf), ask: () => ({ text: 'Did you have a *PF account (UAN)* with an earlier employer?', buttons: ['Yes', 'No'] }),
     handle: (t, d) => { if (yes(t)) d.prevEpf = 'Yes'; else if (no(t)) { d.prevEpf = 'No'; d.prevEps = 'No'; } else return 'Please tap Yes or No.'; } },
-  { key: 'uan', when: d => d.prevEpf === 'Yes', has: d => d.uan !== undefined, ask: () => ({ text: 'What is your 12-digit *UAN*? It\'s on your old payslips or the UAN card. Type *don\'t know* if you can\'t find it.' }),
+  { key: 'uan', forms: ['f11'], when: d => d.prevEpf === 'Yes', has: d => d.uan !== undefined, ask: () => ({ text: 'What is your 12-digit *UAN*? It\'s on your old payslips or the UAN card. Type *don\'t know* if you can\'t find it.' }),
     handle: (t, d) => { const u = t.replace(/\D/g, ''); if (/don'?t know|dont know|not sure|skip/i.test(t)) d.uan = ''; else if (u.length === 12) d.uan = u; else return 'A UAN has 12 digits. Please check and type it again, or type *don\'t know*.'; } },
-  { key: 'prevPf', when: d => d.prevEpf === 'Yes', has: d => d.prevPf !== undefined, ask: () => ({ text: 'Your previous *PF member ID* (looks like MH/BAN/0012345/000/0001234), if you have it. Type *skip* if not.' }),
+  { key: 'prevPf', forms: ['f11'], when: d => d.prevEpf === 'Yes', has: d => d.prevPf !== undefined, ask: () => ({ text: 'Your previous *PF member ID* (looks like MH/BAN/0012345/000/0001234), if you have it. Type *skip* if not.' }),
     handle: (t, d) => { d.prevPf = /^skip|don'?t know|no$/i.test(t) ? '' : clean(t, 60).toUpperCase(); } },
-  { key: 'exitDate', when: d => d.prevEpf === 'Yes', has: d => Boolean(d.exitDate), ask: () => ({ text: 'What was your *last working day* at your previous job? (e.g. 31/10/2026)' }),
+  { key: 'exitDate', forms: ['f11'], when: d => d.prevEpf === 'Yes', has: d => Boolean(d.exitDate), ask: () => ({ text: 'What was your *last working day* at your previous job? (e.g. 31/10/2026)' }),
     handle: (t, d) => { const iso = ocr.toIsoDate(t); if (!iso) return 'Please type the date like 31/10/2026.'; d.exitDate = iso; } },
-  { key: 'prevEps', when: d => d.prevEpf === 'Yes', has: d => Boolean(d.prevEps), ask: () => ({ text: 'Were you also a member of the *pension scheme (EPS)* there? Most employees are.', buttons: ['Yes', 'No', 'Not sure'] }),
+  { key: 'prevEps', forms: ['f11'], when: d => d.prevEpf === 'Yes', has: d => Boolean(d.prevEps), ask: () => ({ text: 'Were you also a member of the *pension scheme (EPS)* there? Most employees are.', buttons: ['Yes', 'No', 'Not sure'] }),
     handle: (t, d) => { if (yes(t)) d.prevEps = 'Yes'; else if (no(t)) d.prevEps = 'No'; else if (/not sure|don'?t know/i.test(t)) d.prevEps = 'Not sure'; else return 'Please tap Yes, No or Not sure.'; } },
-  { key: 'intl', when: (d, c) => !indianIds(c), has: d => Boolean(d.intl), ask: () => ({ text: 'Are you joining as an *international worker* (holding a foreign passport, or covered by another country\'s social security)?', buttons: ['No', 'Yes'] }),
+  { key: 'intl', forms: ['f11'], when: (d, c) => !indianIds(c), has: d => Boolean(d.intl), ask: () => ({ text: 'Are you joining as an *international worker* (holding a foreign passport, or covered by another country\'s social security)?', buttons: ['No', 'Yes'] }),
     handle: (t, d) => { if (no(t)) d.intl = 'No'; else if (yes(t)) d.intl = 'Yes'; else return 'Please tap No or Yes.'; } },
-  { key: 'religion', when: (d, c) => !formOff(c, 'gf'), has: d => Boolean(d.religion), ask: () => ({ text: 'Last one: the gratuity nomination form (Form F) asks for religion. Tap one, or type yours (or *prefer not to say*).', buttons: ['Hindu', 'Muslim', 'Other'] }),
+  { key: 'religion', forms: ['gf'], when: (d, c) => !formOff(c, 'gf'), has: d => Boolean(d.religion), ask: () => ({ text: 'Last one: the gratuity nomination form (Form F) asks for religion. Tap one, or type yours (or *prefer not to say*).', buttons: ['Hindu', 'Muslim', 'Other'] }),
     handle: (t, d) => { if (/^other$/i.test(t)) return 'Please type your religion, e.g. Christian, Sikh, Jain, Buddhist, Parsi, or *prefer not to say*.'; d.religion = /prefer not/i.test(t) ? 'Prefer not to say' : clean(t, 40).replace(/^\w/, c => c.toUpperCase()); } }
 ];
 
-function nextStep(d, c, after) {
+// scope: only questions that feed these forms (e.g. ['f11']); none = all forms.
+function nextStep(d, c, after, scope) {
+  const only = scope === undefined ? d.scope : scope;
   let i = after ? STEPS.findIndex(s => s.key === after) + 1 : 0;
   for (; i < STEPS.length; i++) {
     const st = STEPS[i];
+    if (only && only.length && !st.forms.some(f => only.includes(f))) continue;
     if (st.when && !st.when(d, c)) continue;
     if (st.has && st.has(d, c)) continue;
     return st;
@@ -138,17 +141,40 @@ function infer(d, c) {
 
 // Starts the questions, asking only what is still missing (full: ask everything again).
 // Returns the first message, or null when nothing is missing.
+const FORM_NAMES = { f11: 'Form 11 (PF declaration)', f2a: 'Form 2 (PF nomination)', f2b: 'Form 2 Part B (pension)', esic: 'the ESIC form', gf: 'Form F (gratuity nomination)' };
+
+// Which forms still need answers (for the app's per-form buttons).
+function missingByForm(cand) {
+  const d = Object.assign({ family: [], nominees: [] }, cand.details);
+  infer(d, cand);
+  const out = {};
+  for (const f of Object.keys(FORM_NAMES)) {
+    const keys = [];
+    let st = nextStep(d, cand, null, [f]);
+    while (st) { keys.push(st.key); st = nextStep(d, cand, st.key, [f]); }
+    out[f] = keys;
+  }
+  return out;
+}
+
 function start(cand, opts = {}) {
   const prev = cand.details || {};
+  const scope = Array.isArray(opts.forms) ? opts.forms.filter(f => FORM_NAMES[f]) : [];
   const d = cand.details = opts.full
     ? { startedAt: nowIso(), family: [], nominees: [], previous: prev.completedAt ? { completedAt: prev.completedAt } : undefined }
     : Object.assign({ family: [], nominees: [] }, prev, { startedAt: nowIso(), completedAt: '' });
+  d.scope = scope.length ? scope : null;
   infer(d, cand);
   const s = nextStep(d, cand);
-  if (!s) { d.step = null; d.completedAt = nowIso(); return null; }
+  if (!s) {
+    d.step = null; d.scope = null;
+    if (!nextStep(d, cand, null, null)) d.completedAt = nowIso();
+    return null;
+  }
   d.step = s.key;
   const q = ask(d, cand, s);
-  if (s.key !== 'marital') q.text = 'A few details are still needed for your joining forms.\n\n' + q.text;
+  const forWhat = d.scope ? d.scope.map(f => FORM_NAMES[f]).join(' and ') : 'your joining forms';
+  if (s.key !== 'marital' || d.scope) q.text = `A few details are still needed for ${forWhat}.\n\n` + q.text;
   return q;
 }
 
@@ -193,12 +219,15 @@ function onInbound(cand, m) {
   infer(d, cand);
   const nx = nextStep(d, cand, step.key);
   if (!nx) {
-    d.step = null; d.completedAt = nowIso();
-    if (!/Forms/.test(cand.stage || '')) cand.stage = 'Details submitted';
-    return { handled: true, replies: [{ text: DONE_TEXT }] };
+    const scope = d.scope;
+    d.step = null; d.scope = null;
+    const allDone = !nextStep(d, cand, null, null);
+    if (allDone) { d.completedAt = nowIso(); if (!/Forms/.test(cand.stage || '')) cand.stage = 'Details submitted'; }
+    const text = scope && !allDone ? `Thank you, that's everything needed for ${scope.map(f => FORM_NAMES[f]).join(' and ')}.` : DONE_TEXT;
+    return { handled: true, replies: [{ text }] };
   }
   d.step = nx.key;
   return { handled: true, replies: [ask(d, cand, nx)] };
 }
 
-module.exports = { STEPS, esicApplies, indianIds, start, onInbound, parseFamily, parseNominees, ageOn, DONE_TEXT };
+module.exports = { STEPS, FORM_NAMES, missingByForm, esicApplies, indianIds, start, onInbound, parseFamily, parseNominees, ageOn, DONE_TEXT };

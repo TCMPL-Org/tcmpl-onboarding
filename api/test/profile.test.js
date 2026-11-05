@@ -121,3 +121,21 @@ test('nothing missing: no questions, and asking again with full repeats everythi
   const q = profile.start(cand, { full: true });
   assert.deepEqual(q.buttons, ['Single', 'Married', 'Other']);
 });
+
+test('per-form questions: Form 11 asks only marital, spouse and PF questions', () => {
+  const cand = { kyc: { aadhaarLast4: '1', pan: 'ABCPP1234Q' } };
+  const m = profile.missingByForm(cand);
+  assert.deepEqual(m.f11, ['marital', 'prevEpf']);
+  assert.deepEqual(m.gf, ['marital', 'presAddr', 'permSame', 'family', 'nominees', 'religion']);
+  const q = profile.start(cand, { forms: ['f11'] });
+  assert.match(q.text, /Form 11/);
+  say(cand, 'Married');
+  assert.equal(cand.details.step, 'spouse');
+  say(cand, 'Priya Pawar');
+  assert.equal(cand.details.step, 'prevEpf', 'address and family skipped: not on Form 11');
+  const r = say(cand, 'No');
+  assert.match(r.replies[0].text, /everything needed for Form 11/);
+  assert.equal(cand.details.completedAt, '', 'other forms still need details');
+  assert.deepEqual(profile.missingByForm(cand).f11, []);
+  assert.ok(profile.missingByForm(cand).f2a.includes('family'));
+});

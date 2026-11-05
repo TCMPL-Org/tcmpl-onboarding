@@ -1,0 +1,16 @@
+name: Induction scheduler
+# Every 15 minutes, asks the app to send induction reminders and checks that are due.
+# Needs the repository secret CRON_SECRET (the same value as CRON_SECRET in Azure).
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send due induction messages
+        run: |
+          curl -fsS -X POST -H "x-cron-key: ${{ secrets.CRON_SECRET }}" https://lively-island-0f17b1b00.3.azurestaticapps.net/api/cron/tick

@@ -498,6 +498,10 @@ function tcmplSandbox(profile,fn){
 window.tcmplFormDefs=(profile,pd)=>tcmplSandbox(profile,()=>{ S.pd=pd; return JSON.parse(JSON.stringify(formDefs())); });
 window.tcmplFormPdf=(profile,pd,fid,vals,states,footer)=>tcmplSandbox(profile,()=>{ S.pd=pd; S.formVals=vals||{}; S.formState=states||{}; return formPdf(fid,footer); });
 window.tcmplFormNote=()=>FORM_NOTE;
+// Induction: the selected client and its default plan and quiz (used until HR saves its own).
+window.tcmplClientId=()=>client.id;
+window.tcmplClientLabel=()=>client.label;
+window.tcmplInductionDefaults=()=>({items:JSON.parse(JSON.stringify(client.ov.plan||DEFAULT_PLAN)),quiz:JSON.parse(JSON.stringify(cv('quiz')||[]))});
 window.tcmplPlanFor=(profile)=>tcmplSandbox(profile,()=>S.plan.map(tp=>{ const inf=tpInfo(tp.key); const d=new Date(S.c.doj.getTime()+(tp.abs-S.gap)*DAY); return {key:tp.key,label:inf.t,track:inf.k,rel:relLabel(tp.abs),date:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}; }));
 window.tcmplRenderTouchpoint=(profile,key)=>tcmplSandbox(profile,()=>{ const tp=S.plan.find(x=>x.key===key)||{key,abs:0}; S.idx=Math.max(0,S.plan.indexOf(tp)); (RUN[key]||runCustom)(tp); return [...$('#msgs').children].map(n=>n.cloneNode(true)); });
 function parseOff(code,gap){ const m=/^([OD])([+-]\d+)$/.exec(code||''); if(!m) return null; const n=+m[2]; return m[1]==='O'?n:gap+n; }

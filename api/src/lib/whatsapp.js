@@ -118,6 +118,13 @@ async function sendTemplate(to, values, doc) {
   return Object.assign({ template: name, withDocument: wantsDoc }, sent);
 }
 
+// Any approved template by name, with body values in order ({{1}}, {{2}}, ...).
+async function sendNamedTemplate(to, name, lang, bodyValues) {
+  const template = { name, language: { code: lang || 'en' } };
+  if (bodyValues && bodyValues.length) template.components = [{ type: 'body', parameters: bodyValues.map(v => ({ type: 'text', text: String(v || '-').replace(/\s+/g, ' ').slice(0, 200) })) }];
+  return graph({ to: normalizePhone(to), type: 'template', template });
+}
+
 function templateWantsDocument() { return /^document$/i.test((process.env.WHATSAPP_TEMPLATE_HEADER || '').trim()); }
 
 async function uploadMedia(buffer, mime, filename) {
@@ -159,4 +166,4 @@ async function downloadMedia(mediaId, maxBytes = 15000000) {
   return { buffer, mime: info.mime_type || res.headers.get('content-type') || 'application/octet-stream' };
 }
 
-module.exports = { downloadMedia, templateWantsDocument, sendButtons, uploadMedia, sendDocument, waConfigured, webhookConfigured, normalizePhone, candidateIdFor, verifySignature, parseInbound, sendText, sendTemplate };
+module.exports = { sendNamedTemplate, downloadMedia, templateWantsDocument, sendButtons, uploadMedia, sendDocument, waConfigured, webhookConfigured, normalizePhone, candidateIdFor, verifySignature, parseInbound, sendText, sendTemplate };
