@@ -494,6 +494,10 @@ function tcmplSandbox(profile,fn){
     if(S){ try{ renderBrain(); }catch(e){ /* ignore */ } }
   }
 }
+// Joining forms for a real candidate: definitions filled from their data, and the PDF of one form.
+window.tcmplFormDefs=(profile,pd)=>tcmplSandbox(profile,()=>{ S.pd=pd; return JSON.parse(JSON.stringify(formDefs())); });
+window.tcmplFormPdf=(profile,pd,fid,vals,states,footer)=>tcmplSandbox(profile,()=>{ S.pd=pd; S.formVals=vals||{}; S.formState=states||{}; return formPdf(fid,footer); });
+window.tcmplFormNote=()=>FORM_NOTE;
 window.tcmplPlanFor=(profile)=>tcmplSandbox(profile,()=>S.plan.map(tp=>{ const inf=tpInfo(tp.key); const d=new Date(S.c.doj.getTime()+(tp.abs-S.gap)*DAY); return {key:tp.key,label:inf.t,track:inf.k,rel:relLabel(tp.abs),date:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}; }));
 window.tcmplRenderTouchpoint=(profile,key)=>tcmplSandbox(profile,()=>{ const tp=S.plan.find(x=>x.key===key)||{key,abs:0}; S.idx=Math.max(0,S.plan.indexOf(tp)); (RUN[key]||runCustom)(tp); return [...$('#msgs').children].map(n=>n.cloneNode(true)); });
 function parseOff(code,gap){ const m=/^([OD])([+-]\d+)$/.exec(code||''); if(!m) return null; const n=+m[2]; return m[1]==='O'?n:gap+n; }
@@ -886,10 +890,10 @@ function renderForms(){
   $$('#fmView [data-ged]').forEach(b=>b.onclick=()=>{ S.editing=fkey(f.id,b.dataset.ged); renderForms(); const e=$('#gfEdit'); if(e){ e.focus(); e.select(); } });
   $$('#fmView [data-gsave]').forEach(b=>b.onclick=()=>{ const k=b.dataset.gsave; S.formVals[fkey(f.id,k)]=$('#gfEdit').value.trim(); S.formState[fkey(f.id,k)]='corrected'; S.editing=null; act(`Form field corrected: ${f.title}, ${k}.`); renderForms(); renderBrain(); });
 }
-function formPdf(fid){ const f=formDefs().find(x=>x.id===fid); if(!f) return null; const blocks=[{t:'p',text:f.org},{t:'p',text:f.sub}];
+function formPdf(fid,footer){ const f=formDefs().find(x=>x.id===fid); if(!f) return null; const blocks=[{t:'p',text:f.org},{t:'p',text:f.sub}];
   f.sections.forEach(s=>{ blocks.push({t:'h',text:s.h}); if(s.fields) s.fields.forEach(fl=>blocks.push({t:'kv',k:`${fl.num}. ${fl.label}`,v:(fval(f.id,fl)||'')+(fstate(f.id,fl.k)!=='pending'?'  [confirmed]':'')})); if(s.table) blocks.push({t:'table',rows:[s.table.cols,...(s.table.rows.length?s.table.rows:[[s.table.empty||'']])]}); });
   blocks.push({t:'h',text:'Signature or thumb impression of the member'},{t:'p',text:'____________________________     Date: ____________     Place: ____________'});
-  return makePdf(f.title+' - '+S.c.name,blocks,`Pre-filled by the AI Onboarding Agent from the offer, scanned documents and the candidate's WhatsApp answers. Fields marked [confirmed] were confirmed by the candidate. Demo: sample data. ${FORM_NOTE}`); }
+  return makePdf(f.title+' - '+S.c.name,blocks,footer||`Pre-filled by the AI Onboarding Agent from the offer, scanned documents and the candidate's WhatsApp answers. Fields marked [confirmed] were confirmed by the candidate. Demo: sample data. ${FORM_NOTE}`); }
 $('#fmPdf').onclick=async()=>{ if(!S) return; const b=formPdf(fmSel); const f=formDefs().find(x=>x.id===fmSel); if(b) await saveFile(`${f.title.replace(/\W+/g,'_')}_${S.c.name.replace(/\W+/g,'_')}.pdf`,b,'application/pdf'); };
 $('#fmAsk').onclick=()=>{ if(!S) return; showTab('journey'); formsChat(0); };
 function formsChat(i){ const forms=formDefs().filter(f=>f.applies); if(i>=forms.length){ agent(`<p>All done, ${first()}! Every form is confirmed. I've filed them to ${esc(cv('kycTool'))} and HR will countersign.</p>`); act('All joining forms confirmed by candidate and filed.'); renderBrain(); return; }

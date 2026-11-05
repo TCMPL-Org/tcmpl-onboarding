@@ -9,6 +9,7 @@ const { getStore } = require('./store');
 const wa = require('./whatsapp');
 const agent = require('./agent');
 const documents = require('./documents');
+const profile = require('./profile');
 
 const SYSTEM = { name: 'onboarding-agent' };
 
@@ -123,12 +124,13 @@ async function handleInbound(m) {
 
   // Documents (photos, PDFs, consent and confirmation replies) are handled before the agent.
   if (rec) {
-    const d = await documents.onInbound(store, candidateId, cand, m);
+    let d = await documents.onInbound(store, candidateId, cand, m);
+    if (!d.handled) d = profile.onInbound(cand, m);
     if (d.handled) {
       for (const r of d.replies) {
         let rid = '', rerr = '';
         try { rid = (r.buttons && r.buttons.length ? await wa.sendButtons(cand.phone, r.text, r.buttons) : await wa.sendText(cand.phone, r.text)).id || ''; } catch (e) { rerr = e.message; }
-        await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: r.buttons && r.buttons.length ? `${r.text}\n[Buttons: ${r.buttons.join(' | ')}]` : r.text, waId: rid, error: rerr, source: 'documents', kind: r.buttons ? 'interactive' : 'text' }, SYSTEM);
+        await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: r.buttons && r.buttons.length ? `${r.text}\n[Buttons: ${r.buttons.join(' | ')}]` : r.text, waId: rid, error: rerr, source: 'agent', kind: r.buttons ? 'interactive' : 'text' }, SYSTEM);
       }
       const now = new Date().toISOString();
       await store.put('candidates', candidateId, Object.assign({}, cand, { lastMessageAt: now, lastInboundAt: now }), SYSTEM);
@@ -242,4 +244,84 @@ async function pushItems(p, user) {
   return { status: 200, body: { sent } };
 }
 
-module.exports = { startForOffer, handleInbound, sendManual, pushItems };
+function windowError(e) {
+  const code = e.detail && e.detail.code;
+  const windowClosed = code === 131047 || /24 hours|re-engagement/i.test(e.message || '');
+  return { status: windowClosed ? 409 : 502, body: { error: windowClosed ? 'window_closed' : 'whatsapp_send_failed', detail: e.message } };
+}
+
+async function loadCand(store, candidateId) {
+  if (!/^wa-\d{11,15}$/.test(String(candidateId || ''))) return null;
+  const rec = await store.get('candidates', candidateId);
+  return rec ? Object.assign({}, rec.data) : null;
+}
+
+// HR asks the candidate the joining-form questions on WhatsApp.
+async function askDetails(p, user) {
+  const store = getStore();
+  if (!store) return { status: 503, body: { error: 'database_not_configured' } };
+  if (!wa.waConfigured()) return { status: 503, body: { error: 'whatsapp_not_configured' } };
+  const candidateId = str(p && p.candidateId, 40);
+  const cand = await loadCand(store, candidateId);
+  if (!cand) return { status: 404, body: { error: 'candidate_not_found' } };
+  const q = profile.start(cand, { full: Boolean(p.full) });
+  if (!q) { await store.put('candidates', candidateId, cand, user); return { status: 200, body: { sent: 0, nothingMissing: true } }; }
+  try {
+    const r = q.buttons ? await wa.sendButtons(cand.phone, q.text, q.buttons) : await wa.sendText(cand.phone, q.text);
+    await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: q.buttons ? `${q.text}\n[Buttons: ${q.buttons.join(' | ')}]` : q.text, waId: r.id || '', by: user.name, source: 'journey', kind: q.buttons ? 'interactive' : 'text' }, user);
+  } catch (e) { return windowError(e); }
+  cand.lastMessageAt = new Date().toISOString();
+  await store.put('candidates', candidateId, cand, user);
+  return { status: 200, body: { sent: 1 } };
+}
+
+// HR saves corrections / confirmations made in the Joining forms tab.
+async function saveForms(p, user) {
+  const store = getStore();
+  if (!store) return { status: 503, body: { error: 'database_not_configured' } };
+  const candidateId = str(p && p.candidateId, 40);
+  const cand = await loadCand(store, candidateId);
+  if (!cand) return { status: 404, body: { error: 'candidate_not_found' } };
+  const pick = (o, max) => { const out = {}; if (o && typeof o === 'object') for (const [k, v] of Object.entries(o).slice(0, 400)) if (/^[\w:.-]{1,80}$/.test(k) && typeof v === 'string') out[k] = v.slice(0, max); return out; };
+  const f = Object.assign({}, cand.forms);
+  f.vals = pick(p.vals, 1000);
+  f.states = pick(p.states, 20);
+  f.savedBy = user.name; f.savedAt = new Date().toISOString();
+  if (p.approve === true) { f.approvedBy = user.name; f.approvedAt = f.savedAt; cand.stage = 'Forms approved by HR'; }
+  if (p.approve === false) { f.approvedBy = ''; f.approvedAt = ''; }
+  cand.forms = f;
+  await store.put('candidates', candidateId, cand, user);
+  return { status: 200, body: { ok: true, forms: f } };
+}
+
+// HR sends the filled forms (PDFs made in the browser) to the candidate to confirm.
+async function sendForms(p, user) {
+  const store = getStore();
+  if (!store) return { status: 503, body: { error: 'database_not_configured' } };
+  if (!wa.waConfigured()) return { status: 503, body: { error: 'whatsapp_not_configured' } };
+  const candidateId = str(p && p.candidateId, 40);
+  const cand = await loadCand(store, candidateId);
+  if (!cand) return { status: 404, body: { error: 'candidate_not_found' } };
+  const files = (Array.isArray(p.files) ? p.files : []).filter(x => x && typeof x.pdfBase64 === 'string' && x.pdfBase64.length > 100 && x.pdfBase64.length < 1500000).slice(0, 8);
+  if (!files.length) return { status: 400, body: { error: 'no_forms' } };
+  let sent = 0;
+  try {
+    for (const x of files) {
+      const name = (str(x.filename, 120) || 'Joining_form.pdf').replace(/[^\w.-]+/g, '_');
+      const mid = await wa.uploadMedia(Buffer.from(x.pdfBase64, 'base64'), 'application/pdf', name);
+      const r = await wa.sendDocument(cand.phone, mid, name, str(x.caption, 200));
+      await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: `[Form PDF] ${name}`, waId: r.id || '', by: user.name, source: 'journey', kind: 'document' }, user);
+      sent++;
+    }
+    const text = str(p.text, 1000) || `These are your joining forms, filled from your documents and answers. Please check every detail, especially names, dates of birth and nominee shares.\n\nIs everything correct?`;
+    const r = await wa.sendButtons(cand.phone, text, ['All correct', 'Something is wrong']);
+    await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: `${text}\n[Buttons: All correct | Something is wrong]`, waId: r.id || '', by: user.name, source: 'journey', kind: 'interactive' }, user);
+  } catch (e) { const w = windowError(e); w.body.sent = sent; return w; }
+  const now = new Date().toISOString();
+  cand.forms = Object.assign({}, cand.forms, { sentAt: now, sentBy: user.name, pendingConfirm: true, awaitNote: false, candidateConfirmedAt: '', candidateNote: '' });
+  cand.lastMessageAt = now; cand.stage = 'Forms sent to candidate';
+  await store.put('candidates', candidateId, cand, user);
+  return { status: 200, body: { sent } };
+}
+
+module.exports = { startForOffer, handleInbound, sendManual, pushItems, askDetails, saveForms, sendForms };

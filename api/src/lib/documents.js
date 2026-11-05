@@ -10,6 +10,7 @@
 // The full Aadhaar number is never stored.
 
 const ocr = require('./ocr');
+const profile = require('./profile');
 const deps = {
   wa: require('./whatsapp'),
   docintel: require('./docintel'),
@@ -48,9 +49,12 @@ function askNext(cand) {
   if (!t) {
     d.completedAt = d.completedAt || nowIso();
     cand.stage = 'Documents submitted';
-    return { text: 'That\'s everything for now, thank you! HR will review your documents and get back to you if anything else is needed.' };
+    const out = [{ text: 'All your documents are in, thank you! HR will review them and get back to you if anything else is needed.' }];
+    // Then straight on to the details the joining forms need (once).
+    if (!(cand.details && (cand.details.step || cand.details.completedAt))) { const q = profile.start(cand); if (q) out.push(q); }
+    return out;
   }
-  return { text: DOCS[t].ask };
+  return [{ text: DOCS[t].ask }];
 }
 
 /* ---------- reading one file ---------- */
@@ -189,7 +193,7 @@ async function onInbound(store, candidateId, cand, m) {
         for (const h of held.slice(-1)) replies.push(...await processMedia(store, candidateId, cand, h));
         return { handled: true, replies };
       }
-      return { handled: true, replies: [{ text: 'Thank you.' }, askNext(cand)] };
+      return { handled: true, replies: [{ text: 'Thank you.' }, ...askNext(cand)] };
     }
     if (/^not\s*now\b/i.test(text)) {
       d.declinedAt = nowIso(); d.held = [];
@@ -203,7 +207,7 @@ async function onInbound(store, candidateId, cand, m) {
     if (/^(yes|correct|yes,?\s*correct|ok|okay|right)\b/i.test(text)) {
       d.pendingConfirm = null;
       await confirm(store, candidateId, cand, type);
-      return { handled: true, replies: [{ text: 'Saved, thank you.' }, askNext(cand)] };
+      return { handled: true, replies: [{ text: 'Saved, thank you.' }, ...askNext(cand)] };
     }
     if (/^(fix|no|wrong|incorrect|change)/i.test(text)) {
       d.pendingConfirm = null; d.pendingFix = type;
@@ -221,12 +225,12 @@ async function onInbound(store, candidateId, cand, m) {
     await store.put('documents', docId(candidateId, type), data, SYSTEM);
     d.items = Object.assign({}, d.items, { [type]: { status: 'needs_review', at: data.candidateConfirmedAt } });
     applyKyc(cand, type, data.fields || {});
-    return { handled: true, replies: [{ text: 'Thanks, I\'ve noted that for HR to correct.' }, askNext(cand)] };
+    return { handled: true, replies: [{ text: 'Thanks, I\'ve noted that for HR to correct.' }, ...askNext(cand)] };
   }
 
   if (/^(documents?|docs?|upload)$/i.test(text)) {
     if (!d.consentAt) { d.requestedAt = d.requestedAt || nowIso(); return { handled: true, replies: [{ text: consentText(cand), buttons: ['I agree', 'Not now'] }] }; }
-    return { handled: true, replies: [askNext(cand)] };
+    return { handled: true, replies: askNext(cand) };
   }
 
   return { handled: false, replies: [] };
@@ -249,7 +253,7 @@ async function request(store, candidateId, user) {
   const cand = Object.assign({}, rec.data);
   const d = cand.docs = Object.assign({ items: {} }, cand.docs);
   d.requestedAt = nowIso(); d.requestedBy = user.name; d.declinedAt = null;
-  const replies = d.consentAt ? [askNext(cand)] : [{ text: consentText(cand), buttons: ['I agree', 'Not now'] }];
+  const replies = d.consentAt ? askNext(cand) : [{ text: consentText(cand), buttons: ['I agree', 'Not now'] }];
   try { await sendReplies(cand.phone, replies); }
   catch (e) {
     const code = e.detail && e.detail.code;

@@ -155,7 +155,9 @@ test('WhatsApp flow: consent, Aadhaar, confirm, PAN, fix, bank, review', async (
   r = await documents.onInbound(store, id, cand, { type: 'interactive', text: 'Yes, correct' });
   assert.equal(cand.docs.items.bank.status, 'confirmed');
   assert.equal(cand.kyc.bank.ifsc, 'HDFC0001234');
-  assert.match(r.replies[1].text, /That's everything/);
+  assert.match(r.replies[1].text, /All your documents are in/);
+  assert.match(r.replies[2].text, /marital status/);
+  assert.deepEqual(r.replies[2].buttons, ['Single', 'Married', 'Other']);
   assert.equal(cand.stage, 'Documents submitted');
 
   // Ordinary questions still go to the agent.

@@ -120,6 +120,15 @@ async function docsFile({ candidateId, type, user }) {
   }
 }
 
+// Joining forms: details questions, HR edits/approval, send to candidate.
+async function formsAction({ action, body, user }) {
+  if (!user) return json(401, { error: 'sign_in_required' });
+  const fn = { details: conversations.askDetails, save: conversations.saveForms, send: conversations.sendForms }[action];
+  if (!fn) return json(404, { error: 'unknown_action' });
+  const r = await fn(body || {}, user);
+  return json(r.status, r.body);
+}
+
 // Meta webhook: GET = subscription check, POST = incoming messages.
 function waVerify(query) {
   const ok = query.get('hub.mode') === 'subscribe' && process.env.WHATSAPP_VERIFY_TOKEN && query.get('hub.verify_token') === process.env.WHATSAPP_VERIFY_TOKEN;
@@ -136,4 +145,4 @@ async function waWebhook(rawBody, signature) {
   return { status: 200, body: 'OK' };
 }
 
-module.exports = { health, data, ai, waStart, waSend, waPush, waVerify, waWebhook, docsRequest, docsReview, docsFile };
+module.exports = { health, data, ai, waStart, waSend, waPush, waVerify, waWebhook, docsRequest, docsReview, docsFile, formsAction };
