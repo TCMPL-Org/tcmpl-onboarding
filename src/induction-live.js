@@ -57,7 +57,7 @@ function mount() {
       <p class="note" style="margin:4px 0 10px">Up to 3 answers per question (WhatsApp shows them as buttons). Tick the correct one.</p>
       <div id="ilQuiz"></div>
       <div class="row" style="margin-top:8px"><label class="lbl" for="ilPass">Pass mark</label><input type="number" id="ilPass" min="1" style="width:70px"><span class="note" id="ilPassOf"></span></div></div>
-    <div class="card"><h3 style="margin:0 0 8px">Progress on WhatsApp</h3>
+    <div class="card"><h3 style="margin:0 0 8px">Progress on WhatsApp</h3><p class="note" style="margin:0 0 8px">Messages are sent from Candidate journey. This shows where each candidate is.</p>
       <div class="row"><label class="lbl" for="ilCand">Candidate</label><select id="ilCand"></select><button class="btn small" id="ilRefresh" type="button">Refresh</button></div>
       <p class="note" id="ilSched" style="margin:6px 0"></p>
       <div id="ilProg"></div></div>
@@ -182,7 +182,7 @@ function dueDate(doj, day) {
 }
 
 function renderProgress() {
-  $('#ilSched').innerHTML = health.scheduler ? 'Automatic sending is on (checked every 15 minutes, 8 am to 9 pm).' : '<b>Automatic sending is not set up yet.</b> Use "Send now" to test; the scheduler setup is a one-time step.';
+  $('#ilSched').innerHTML = health.scheduler ? 'Automatic sending is on (checked every 15 minutes, 8 am to 9 pm).' : '<b>Automatic sending is not set up yet.</b> Use "Send now" on the step in Candidate journey to test.';
   const c = cands.find(x => x.id === cSel);
   if (!c) { $('#ilProg').innerHTML = '<p class="note">Release an offer for this client to see progress here.</p>'; return; }
   const st = (c.induction && c.induction.items) || {};
@@ -192,19 +192,10 @@ function renderProgress() {
       const s = st[it.id] || {};
       const [lab, cls] = ST[s.status] || (s.remindedAt ? ['Reminded', 'info'] : ['Not started', '']);
       const extra = [s.score ? 'Score ' + s.score : '', s.ackAt ? 'Read ✓' : '', s.checks ? `Asked ${s.checks}×` : ''].filter(Boolean).join(' · ');
-      return `<tr><td><b>${esc(it.title)}</b><div class="note">${esc(dueDate(c.profile.doj, it.day))}, ${esc(it.time)} · ${esc(TYPES.find(t => t[0] === it.kind)[1])}</div></td><td><span class="chip ${cls}">${esc(lab)}</span>${extra ? `<div class="note">${esc(extra)}</div>` : ''}</td><td><button class="btn small" data-now="${esc(it.id)}" type="button" ${dirty ? 'disabled' : ''}>Send now</button></td></tr>`;
+      return `<tr><td><b>${esc(it.title)}</b><div class="note">${esc(dueDate(c.profile.doj, it.day))}, ${esc(it.time)} · ${esc(TYPES.find(t => t[0] === it.kind)[1])}</div></td><td><span class="chip ${cls}">${esc(lab)}</span>${extra ? `<div class="note">${esc(extra)}</div>` : ''}</td><td><button class="btn small" data-now="${esc(it.id)}" type="button">Open in journey</button></td></tr>`;
     }).join('') + '</table>';
-  document.querySelectorAll('#ilProg [data-now]').forEach(b => { b.onclick = () => sendNow(c, b.dataset.now, b); });
-}
-
-async function sendNow(c, itemId, btn) {
-  btn.disabled = true;
-  const r = await U().getJson('/api/induction/send', { method: 'POST', body: JSON.stringify({ candidateId: c.id, itemId }) }).catch(() => ({ ok: false }));
-  btn.disabled = false;
-  if (r.ok && r.body.held) U().toast('WhatsApp window is closed: the message will go out when the candidate next writes.');
-  else if (r.ok) U().toast(`Sent to ${c.name} on WhatsApp.`);
-  else U().toast(r.body && r.body.error === 'no_induction_plan' ? 'Save the plan for this client first.' : r.body && r.body.error === 'no_quiz' ? 'Add quiz questions and save first.' : U().explain(r));
-  loadCands();
+  // Sending happens from Candidate journey only.
+  document.querySelectorAll('#ilProg [data-now]').forEach(b => { b.onclick = () => { const t = document.querySelector('nav.tabs button[data-tab="journey"]'); if (t) t.click(); setTimeout(() => { if (window.tcmplLive) window.tcmplLive.reload(c.id, 'ind:' + b.dataset.now); }, 50); }; });
 }
 
 (function waitForApp(n) {

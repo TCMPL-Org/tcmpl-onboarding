@@ -65,8 +65,7 @@ function mount() {
       <span class="chip" id="flDocs"></span><span class="chip" id="flDetails"></span><span class="chip" id="flStatus"></span>
     </div>
     <div class="row" id="flActions">
-      <button class="btn small" id="flAskDetails" type="button" title="The agent asks only what the forms are still missing">Ask all missing details on WhatsApp</button>
-      <button class="btn small teal" id="flSend" type="button">Send forms to candidate</button>
+      <button class="btn small teal" id="flJourney" type="button" title="Asking details and sending forms to the candidate is done from Candidate journey">Send from Candidate journey</button>
       <button class="btn small primary" id="flApprove" type="button">Approve forms</button>
       <button class="btn small" id="flRefresh" type="button">Refresh</button>
     </div>
@@ -78,8 +77,7 @@ function mount() {
   sec.querySelector('.intro').after(bar);
   $('#flCand').onchange = () => { selected = $('#flCand').value; editing = null; load(); };
   $('#flRefresh').onclick = () => reload();
-  $('#flAskDetails').onclick = () => askDetails();
-  $('#flSend').onclick = sendForms;
+  $('#flJourney').onclick = () => openJourney();
   $('#flApprove').onclick = approve;
   $('#flPdf').onclick = () => download([fSel]);
   $('#flPdfAll').onclick = () => download(forms.filter(f => f.applies).map(f => f.id));
@@ -140,7 +138,6 @@ const fv = (f, fl) => vals[key(f.id, fl.k)] !== undefined ? vals[key(f.id, fl.k)
 const fst = (f, k) => states[key(f.id, k)] || 'pending';
 function items(f) { const out = []; f.sections.forEach(s => { (s.fields || []).forEach(x => out.push({ k: x.k, v: fv(f, x) })); if (s.table) out.push({ k: s.table.k, v: s.table.rows.length || s.table.empty ? 'x' : '' }); }); return out; }
 function progress(f) { const it = items(f); return { filled: it.filter(x => x.v).length, total: it.length }; }
-function missing() { return forms.filter(f => f.applies).reduce((a, f) => { const p = progress(f); return a + p.total - p.filled; }, 0); }
 
 /* ---------- rendering ---------- */
 function renderHead() {
@@ -175,7 +172,7 @@ function renderView() {
   if (missingQ && missingQ[f.id]) {
     const qs = [...new Set(missingQ[f.id].map(k => QLABEL[k] || k))];
     h += qs.length
-      ? `<div class="callout fl-miss"><div><b>${esc(f.title)} still needs from the candidate:</b> ${esc(qs.join(', '))}.${inProgress ? ' <span class="note">(The candidate is answering questions on WhatsApp right now.)</span>' : ''}</div><button class="btn small teal" id="flAskForm" type="button">Ask missing details for this form</button></div>`
+      ? `<div class="callout fl-miss"><div><b>${esc(f.title)} still needs from the candidate:</b> ${esc(qs.join(', '))}.${inProgress ? ' <span class="note">(The candidate is answering questions on WhatsApp right now.)</span>' : ' <span class="note">Ask for them from Candidate journey → Joining forms step.</span>'}</div><button class="btn small teal" id="flAskForm" type="button">Open in Candidate journey</button></div>`
       : `<div class="callout fl-miss ok"><b>Nothing missing from the candidate for ${esc(f.title)}.</b></div>`;
   }
   h += `<div class="gfhead"><div class="lbl">${esc(f.org)}</div><h3>${esc(f.title)}</h3><div>${esc(f.sub)}</div></div>`;
@@ -191,7 +188,7 @@ function renderView() {
     }
   });
   $('#flView').innerHTML = h;
-  if ($('#flAskForm')) $('#flAskForm').onclick = () => askDetails([f.id], f.title);
+  if ($('#flAskForm')) $('#flAskForm').onclick = () => openJourney();
   document.querySelectorAll('#flView [data-edit]').forEach(b => { b.onclick = () => { editing = key(f.id, b.dataset.edit); renderView(); const e = $('#flEdit'); if (e) { e.focus(); e.select(); } }; });
   document.querySelectorAll('#flView [data-save]').forEach(b => { b.onclick = () => saveField(f, b.dataset.save); });
   const e = $('#flEdit'); if (e) e.onkeydown = ev => { if (ev.key === 'Enter') saveField(f, editing.split(':')[1]); if (ev.key === 'Escape') { editing = null; renderView(); } };
@@ -223,18 +220,12 @@ async function approve() {
   renderHead();
 }
 
-async function askDetails(scope, title) {
-  const c = current(); if (!c || busy) return;
-  const forOne = Array.isArray(scope) && scope.length;
-  // Only what is still missing; after a full set of answers HR can ask everything again.
-  let full = false;
-  if (!forOne && c.details && c.details.completedAt) { if (!window.confirm('This candidate has already answered everything the forms need. Ask all the questions again?')) return; full = true; }
-  if (inProgress && !window.confirm('The candidate is still answering questions on WhatsApp. Start again with these questions instead?')) return;
-  busy = true; $('#flAskDetails').disabled = true;
-  const r = await post('/api/forms/details', { candidateId: c.id, full, forms: forOne ? scope : undefined });
-  busy = false; $('#flAskDetails').disabled = false;
-  if (r.ok && r.body.nothingMissing) { U().toast(`Nothing is missing${forOne ? ' for ' + title : ''}.`); reload(); }
-  else if (r.ok) { U().toast(`Asked ${c.name} on WhatsApp for the details ${forOne ? title : 'the forms'} still need${forOne ? 's' : ''}.`); reload(); } else U().toast(U().explain(r));
+// All messages go from Candidate journey: jump there with this candidate on the Joining forms step.
+function openJourney() {
+  const c = current(); if (!c) return;
+  const b = document.querySelector('nav.tabs button[data-tab="journey"]');
+  if (b) b.click();
+  setTimeout(() => { if (window.tcmplLive) window.tcmplLive.reload(c.id, 'tp:confirm'); }, 50);
 }
 
 function footer(c) {
@@ -260,19 +251,31 @@ function download(ids) {
   }, i * 400));
 }
 
-async function sendForms() {
-  const c = current(); if (!c || busy) return;
-  const miss = missing();
-  if (miss && !window.confirm(`${miss} item(s) in the forms are still empty. Send to ${c.name} anyway?`)) return;
-  const files = pdfs(forms.filter(f => f.applies).map(f => f.id));
-  if (!files.length) { U().toast('PDF tool is still loading. Try again in a moment.'); return; }
-  busy = true; $('#flSend').disabled = true;
-  const payload = { candidateId: c.id, files: [] };
-  for (const x of files) payload.files.push({ filename: x.filename, pdfBase64: await U().blobToBase64(x.blob), caption: x.title });
-  const r = await post('/api/forms/send', payload);
-  busy = false; $('#flSend').disabled = false;
-  if (r.ok) { U().toast(`Sent ${r.body.sent} form(s) to ${c.name} on WhatsApp.`); reload(); } else U().toast(U().explain(r));
-}
+// Used by Candidate journey (all sending happens there): PDFs for a candidate, empty-field count, open the full forms.
+window.tcmplFormsKit = {
+  defs(c) { try { return (window.tcmplFormDefs(profileOf(c), pdOf(c)) || []).filter(f => f.applies); } catch (e) { console.warn(e); return []; } },
+  empty(c) {
+    const v = (c.forms && c.forms.vals) || {};
+    let n = 0;
+    for (const f of this.defs(c)) f.sections.forEach(s => { (s.fields || []).forEach(x => { const k = f.id + ':' + x.k; if (!(v[k] !== undefined ? v[k] : x.val)) n++; }); if (s.table && !s.table.rows.length && !s.table.empty) n++; });
+    return n;
+  },
+  async files(c) {
+    const v = (c.forms && c.forms.vals) || {}, st = (c.forms && c.forms.states) || {};
+    const out = [];
+    for (const f of this.defs(c)) {
+      const blob = window.tcmplFormPdf(profileOf(c), pdOf(c), f.id, v, st, footer(c));
+      if (blob) out.push({ filename: `${f.title.replace(/\W+/g, '_')}_${String(c.name || '').replace(/\W+/g, '_')}.pdf`, pdfBase64: await U().blobToBase64(blob), caption: f.title });
+    }
+    return out;
+  },
+  open(id) {
+    selected = id;
+    const b = document.querySelector('nav.tabs button[data-tab="forms"]');
+    if (b) b.click();
+    setTimeout(reload, 50);
+  }
+};
 
 (function waitForApp(n) {
   if (window.tcmplWAUtil && window.tcmplFormDefs && mount()) return;

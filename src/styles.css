@@ -279,3 +279,31 @@ img{max-width:100%}body{margin:0}
 .il-opt{display:flex;gap:6px;align-items:center;margin:4px 0 0 18px}
 .il-prog{width:100%;border-collapse:collapse;font-size:.85rem}
 .il-prog td{padding:6px 4px;border-bottom:1px solid var(--line);vertical-align:top}
+.jl-stagebar{margin-bottom:16px;padding:14px 16px}
+.jl-sb-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.jl-sb-now{font-size:1.5rem;font-weight:700;color:var(--teal)}
+.jl-sb-next{font-size:.9rem}
+.jl-sb{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:6px}
+@media (max-width:900px){.jl-sb{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.jl-sb-step{display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 4px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font:inherit;font-size:.78rem;font-weight:600;color:inherit;cursor:pointer;text-align:center}
+.jl-sb-ico{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid var(--line);font-size:.85rem}
+.jl-sb-step.done .jl-sb-ico{background:var(--ok);border-color:var(--ok);color:#fff}
+.jl-sb-step.active .jl-sb-ico{border-color:var(--teal);color:var(--teal)}
+.jl-sb-step.red .jl-sb-ico{background:var(--bad,#b42318);border-color:var(--bad,#b42318);color:#fff}
+.jl-sb-step.cur{border-color:var(--teal);background:var(--teal-soft);box-shadow:0 0 0 2px var(--teal-soft)}
+.jl-sb-step.empty{opacity:.5}
+.jl-ph{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted,#667);margin:12px 4px 4px;padding-bottom:4px;border-bottom:1px solid var(--line)}
+.jl-ph.done{color:var(--ok)}
+.jl-ph.red{color:var(--bad,#b42318)}
+.jl-tp.now{border-color:var(--teal)}
+.jl-tp.off{opacity:.7}
+.jl-st-ok{color:var(--ok)}.jl-st-warn{color:var(--warn)}.jl-st-bad{color:var(--bad,#b42318)}.jl-st-info{color:var(--teal)}
+.jl-sp-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.jl-sp-head h3{margin:0}
+.jl-sp-sec{border-top:1px solid var(--line);padding:10px 0}
+.jl-sp-sec>.lbl{margin-bottom:6px}
+.jl-sp-actions{gap:8px;flex-wrap:wrap;padding:6px 0 12px}
+.jl-checklist{list-style:none;padding:0;margin:0;font-size:.88rem}
+.jl-checklist li{padding:4px 0}
+.jl-perform{margin-top:8px;border-top:1px dashed var(--line);padding-top:6px}
+.jl-pf{padding:4px 0;font-size:.86rem}
