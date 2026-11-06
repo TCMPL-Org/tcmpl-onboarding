@@ -7,6 +7,9 @@ const { aiConfigured, completeJson } = require('./ai');
 const wa = require('./whatsapp');
 const conversations = require('./conversations');
 const inductionRun = require('./induction-run');
+const notify = require('./notify');
+const walk = require('./walk');
+const { emailConfigured } = require('./email');
 const documents = require('./documents');
 const { docintelConfigured } = require('./docintel');
 const { storageConfigured } = require('./blob');
@@ -17,7 +20,7 @@ const json = (status, body) => ({ status, jsonBody: body });
 
 function health() {
   const store = getStore();
-  return json(200, { ok: true, db: Boolean(store), store: store ? store.kind : null, ai: aiConfigured(), whatsapp: wa.waConfigured(), webhook: wa.webhookConfigured(), ocr: docintelConfigured(), storage: storageConfigured(), scheduler: Boolean(process.env.CRON_SECRET) });
+  return json(200, { ok: true, db: Boolean(store), store: store ? store.kind : null, ai: aiConfigured(), whatsapp: wa.waConfigured(), webhook: wa.webhookConfigured(), ocr: docintelConfigured(), storage: storageConfigured(), scheduler: Boolean(process.env.CRON_SECRET), email: emailConfigured() });
 }
 
 async function data({ method, col, id, body, user }) {
@@ -26,6 +29,7 @@ async function data({ method, col, id, body, user }) {
   if (id !== undefined && id !== null && id !== '' && !validId(id)) return json(400, { error: 'bad_id' });
   if (col === 'letters') return json(403, { error: 'not_available' });
   if ((col === 'messages' || col === 'documents' || col === 'content') && method !== 'GET') return json(403, { error: 'read_only' });
+  if (col === 'facts' && method === 'PUT' && body) body = { facts: String(body.facts || '').slice(0, 12000), faq: String(body.faq || '').slice(0, 6000), updated: new Date().toISOString() };
   const store = getStore();
   if (!store) return json(503, { error: 'database_not_configured' });
 
@@ -70,6 +74,15 @@ async function ai({ body, user }) {
   }
 }
 
+// When WhatsApp refuses because the 24-hour window is closed, keep the message and send it as soon as the candidate writes.
+async function heldOr(r, action, payload, user) {
+  if (r.status === 409 && r.body && r.body.error === 'window_closed' && payload && payload.candidateId) {
+    const h = await conversations.hold(String(payload.candidateId), action, payload, user);
+    return json(h.status, h.body);
+  }
+  return json(r.status, r.body);
+}
+
 async function waStart({ body, user }) {
   if (!user) return json(401, { error: 'sign_in_required' });
   const r = await conversations.startForOffer(body || {}, user);
@@ -79,13 +92,14 @@ async function waStart({ body, user }) {
 async function waSend({ body, user }) {
   if (!user) return json(401, { error: 'sign_in_required' });
   const r = await conversations.sendManual(body || {}, user);
-  return json(r.status, r.body);
+  return heldOr(r, 'text', body, user);
 }
 
 async function waPush({ body, user }) {
   if (!user) return json(401, { error: 'sign_in_required' });
   const r = await conversations.pushItems(body || {}, user);
-  return json(r.status, r.body);
+  const rest = Object.assign({}, body, { items: (Array.isArray(body && body.items) ? body.items : []).slice((r.body && r.body.sent) || 0) });
+  return heldOr(r, 'push', rest, user);
 }
 
 // Documents: HR asks for documents, reviews them, opens a stored file.
@@ -97,7 +111,7 @@ async function docsRequest({ body, user }) {
   const id = String((body && body.candidateId) || '');
   if (!/^wa-\d{11,15}$/.test(id)) return json(400, { error: 'candidate_required' });
   const r = await documents.request(store, id, user);
-  return json(r.status, r.body);
+  return heldOr(r, 'docs', { candidateId: id }, user);
 }
 
 async function docsReview({ body, user }) {
@@ -127,12 +141,13 @@ async function formsAction({ action, body, user }) {
   const fn = { details: conversations.askDetails, save: conversations.saveForms, send: conversations.sendForms, missing: conversations.missingDetails }[action];
   if (!fn) return json(404, { error: 'unknown_action' });
   const r = await fn(body || {}, user);
-  return json(r.status, r.body);
+  return action === 'details' ? heldOr(r, 'details', body, user) : action === 'send' ? heldOr(r, 'forms', body, user) : json(r.status, r.body);
 }
 
 // Induction: HR "Send now", content upload / open.
 async function inductionAction({ action, body, user }) {
   if (!user) return json(401, { error: 'sign_in_required' });
+  if (action === 'ready-update' || action === 'ready-ask') { const r = await inductionRun.readyAction(action.slice(6), body || {}, user); return json(r.status, r.body); }
   const fn = { send: inductionRun.sendNow, upload: inductionRun.uploadContent }[action];
   if (!fn) return json(404, { error: 'unknown_action' });
   const r = await fn(body || {}, user);
@@ -156,6 +171,18 @@ async function cronTick({ key }) {
   return json(200, await inductionRun.tick());
 }
 
+// Email: owner tasks, candidate emails, client email settings. Walkthrough: jump / run / realtime / reset.
+async function notifyAction({ action, body, user }) {
+  if (!user) return json(401, { error: 'sign_in_required' });
+  const fn = { owner: notify.ownerTask, candidate: notify.candidateEmail, settings: notify.saveSettings }[action];
+  if (fn) { const r = await fn(body || {}, user); return json(r.status, r.body); }
+  if (['jump', 'run', 'realtime', 'reset'].includes(action)) { const r = await walk.action(action, body || {}, user); return json(r.status, r.body); }
+  return json(404, { error: 'unknown_action' });
+}
+
+// One-click links in emails (no sign-in; the link is signed).
+async function confirmLink({ token }) { return notify.confirm(token); }
+
 // Meta webhook: GET = subscription check, POST = incoming messages.
 function waVerify(query) {
   const ok = query.get('hub.mode') === 'subscribe' && process.env.WHATSAPP_VERIFY_TOKEN && query.get('hub.verify_token') === process.env.WHATSAPP_VERIFY_TOKEN;
@@ -172,4 +199,4 @@ async function waWebhook(rawBody, signature) {
   return { status: 200, body: 'OK' };
 }
 
-module.exports = { health, data, ai, waStart, waSend, waPush, waVerify, waWebhook, docsRequest, docsReview, docsFile, formsAction, inductionAction, contentFile, cronTick };
+module.exports = { health, data, ai, waStart, waSend, waPush, waVerify, waWebhook, docsRequest, docsReview, docsFile, formsAction, inductionAction, contentFile, cronTick, notifyAction, confirmLink };

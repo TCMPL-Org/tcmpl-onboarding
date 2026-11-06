@@ -7,6 +7,12 @@
       ]
     },
     {
+      "route": "/api/confirm",
+      "allowedRoles": [
+        "anonymous"
+      ]
+    },
+    {
       "route": "/api/cron/tick",
       "allowedRoles": [
         "anonymous"

@@ -1,0 +1,55 @@
+// Client setup → Email settings for the selected client: reply-to (who answers when people reply) and the
+// CC added to every owner email. The From address is set in Azure (ACS_SENDER).
+
+const U = () => window.tcmplWAUtil;
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+function mount() {
+  const sec = $('#tab-config');
+  if (!sec || $('#slive')) return Boolean($('#slive'));
+  const box = document.createElement('div');
+  box.id = 'slive';
+  box.className = 'card';
+  box.style.marginBottom = '16px';
+  box.innerHTML = `<h3 style="margin:0 0 4px">Email settings · <span id="slClient"></span></h3>
+    <p class="note" style="margin:0 0 10px" id="slNote"></p>
+    <div class="grid2">
+      <label>Reply-to (replies go to this person, usually HR)<input id="slReply" type="text" placeholder="hr@talentcarriage.com" style="width:100%"></label>
+      <label>CC on every owner email (optional)<input id="slCc" type="text" placeholder="clienthr@company.com, recruiter@company.com" style="width:100%"></label>
+    </div>
+    <p class="note" style="margin:8px 0">Owners' emails come from the People section below: write them like <i>Rohit Verma, IT &lt;rohit@company.com&gt;</i>.</p>
+    <div class="row"><button class="btn small primary" id="slSave" type="button">Save email settings</button><span class="note" id="slState"></span></div>`;
+  sec.querySelector('.intro').after(box);
+  $('#slSave').onclick = save;
+  document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab === 'config') load(); }));
+  const sel = $('#clientSel'); if (sel) sel.addEventListener('change', () => setTimeout(load, 50));
+  load();
+  return true;
+}
+
+async function load() {
+  const u = U(); if (!u) return;
+  const client = window.tcmplClientId ? window.tcmplClientId() : '';
+  $('#slClient').textContent = window.tcmplClientLabel ? window.tcmplClientLabel() : client;
+  const h = await u.loadHealth();
+  $('#slNote').innerHTML = h.email ? 'Email is connected. Owner tasks, reminders and escalations are sent from the Azure sender address.' : '<b>Email is not connected yet</b> (add ACS_CONNECTION_STRING and ACS_SENDER in Azure). Until then, "Email owner" opens a draft in your Outlook.';
+  const r = h.db ? await u.getJson(`/api/data/journeys/${encodeURIComponent(client)}`).catch(() => ({ ok: false })) : { ok: false };
+  const e = (r.ok && r.body.data && r.body.data.email) || {};
+  $('#slReply').value = e.replyTo || ''; $('#slCc').value = e.cc || '';
+  $('#slState').textContent = '';
+}
+
+async function save() {
+  const client = window.tcmplClientId ? window.tcmplClientId() : '';
+  const r = await U().getJson('/api/notify/settings', { method: 'POST', body: JSON.stringify({ client, replyTo: $('#slReply').value, cc: $('#slCc').value }) }).catch(() => ({ ok: false }));
+  if (!r.ok) { $('#slState').textContent = 'Not saved.'; return; }
+  $('#slReply').value = r.body.email.replyTo; $('#slCc').value = r.body.email.cc;
+  $('#slState').textContent = 'Saved' + (r.body.sender ? ' · sent from ' + esc(r.body.sender) : '');
+}
+
+(function waitForApp(n) {
+  if (window.tcmplWAUtil && window.tcmplClientId && mount()) return;
+  if (n > 100) return;
+  setTimeout(() => waitForApp(n + 1), 100);
+})(0);

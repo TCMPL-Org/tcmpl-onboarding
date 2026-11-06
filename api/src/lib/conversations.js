@@ -12,6 +12,7 @@ const documents = require('./documents');
 const profile = require('./profile');
 const induction = require('./induction');
 const inductionRun = require('./induction-run');
+const readiness = require('./readiness');
 
 const SYSTEM = { name: 'onboarding-agent' };
 
@@ -87,6 +88,7 @@ async function startForOffer(p, user) {
   const pdf = typeof p.letterPdfBase64 === 'string' && p.letterPdfBase64.length > 100 && p.letterPdfBase64.length < MAX_PDF_B64 ? p.letterPdfBase64 : '';
   if (pdf) {
     cand.letterFile = str(p.letterFile, 150) || 'Offer_Letter.pdf';
+    cand.letterProtected = Boolean(p.letterProtected);
     cand.letterSent = false;
     cand.letterMediaId = '';
     cand.hasLetter = true;
@@ -112,7 +114,16 @@ async function startForOffer(p, user) {
 }
 
 // A candidate wrote to the WhatsApp number.
-async function handleInbound(m) {
+// Offer replies (the offer step's buttons are Accept offer / I have questions / Decline).
+const ACCEPT = /^\s*(yes,? and )?i? ?accept/i;
+const DECLINE = /^\s*(i )?(decline|want to decline|reject)\b/i;
+
+// The letter is locked with the joining date (MMDDYYYY); the caption says how, never the password itself.
+function letterNote(cand) {
+  return cand.letterProtected ? '\n\nThe PDF is password-protected: the password is your joining date as MMDDYYYY (for example, 15 January 2027 would be 01152027).' : '';
+}
+
+async function handleInboundCore(m) {
   const store = getStore();
   if (!store || !m || !m.from) return;
   const id = msgId('m', m.id || (m.from + m.timestamp));
@@ -128,9 +139,10 @@ async function handleInbound(m) {
   if (rec) {
     let d = await documents.onInbound(store, candidateId, cand, m);
     if (!d.handled) d = profile.onInbound(cand, m);
+    if (!d.handled && cand.readiness) d = readiness.onInbound(cand, m);
     if (!d.handled && cand.induction) d = induction.onInbound(cand, await inductionRun.planFor(store, cand.profile && cand.profile.client), m);
     if (d.handled) {
-      await inductionRun.deliver(store, candidateId, cand, d.replies, SYSTEM, '');
+      await inductionRun.deliver(store, candidateId, cand, d.replies, SYSTEM, '', 'agent');
       const now = new Date().toISOString();
       await store.put('candidates', candidateId, Object.assign({}, cand, { lastMessageAt: now, lastInboundAt: now }), SYSTEM);
       return;
@@ -143,7 +155,7 @@ async function handleInbound(m) {
   } else if (m.type !== 'text' && !m.text) {
     out = { source: 'system', reply: "Thanks, I've received it. The hiring team will review it.", handover: false, riskSignals: [] };
   } else {
-    out = await agent.reply(cand, await history(store, candidateId), text);
+    out = await agent.reply(await withLatestFacts(store, cand), await history(store, candidateId), text);
   }
 
   let waId = '', error = '';
@@ -153,7 +165,7 @@ async function handleInbound(m) {
   // WhatsApp allows files once the candidate has written to us: send the offer letter now, once.
   let letterSent = Boolean(cand.letterSent);
   if (rec && (cand.letterMediaId || cand.hasLetter) && !letterSent) {
-    const caption = `Your offer letter from ${cand.company || cand.clientLabel || 'us'}. Ask me anything about it here.`;
+    const caption = `Your offer letter from ${cand.company || cand.clientLabel || 'us'}. Ask me anything about it here.${letterNote(cand)}`;
     let lid = '', lerr = '';
     try { const mid = await letterMedia(store, candidateId, cand); if (mid) { lid = (await wa.sendDocument(cand.phone, mid, cand.letterFile, caption)).id || ''; letterSent = !!lid; } } catch (e) { lerr = e.message; }
     await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: `[Offer letter PDF] ${caption}`, waId: lid, error: lerr, source: 'agent', kind: 'document' }, SYSTEM);
@@ -165,11 +177,14 @@ async function handleInbound(m) {
   const handovers = Array.isArray(cand.handovers) ? cand.handovers.slice() : [];
   if (out.handover) handovers.push({ why: out.handoverReason || 'Needs a person', at: now, open: true });
   if (out.callback) handovers.push({ why: 'Call-back requested: ' + out.callback, at: now, open: true });
+  if (DECLINE.test(text)) handovers.push({ why: 'Candidate wants to decline the offer: call them today', at: now, open: true });
   await store.put('candidates', candidateId, Object.assign({}, cand, {
     risk, riskScore: Math.min(100, risk.reduce((a, r) => a + (r.weight || 0), 0)), handovers,
     lastMessageAt: now, lastInboundAt: now, name: cand.name || m.name || '', letterSent,
     letterMediaId: cand.letterMediaId || '', letterUploadedAt: cand.letterUploadedAt, letterFile: cand.letterFile,
-    stage: /^\s*(yes,? and )?i? ?accept/i.test(text) ? 'Offer accepted' : cand.stage
+    stage: ACCEPT.test(text) ? 'Offer accepted' : DECLINE.test(text) ? 'Offer declined' : cand.stage,
+    acceptedAt: ACCEPT.test(text) ? (cand.acceptedAt || now) : cand.acceptedAt,
+    declinedAt: DECLINE.test(text) ? now : cand.declinedAt
   }), SYSTEM);
 }
 
@@ -188,7 +203,8 @@ async function sendManual(p, user) {
     await saveMessage(store, newId('o'), { candidateId, direction: 'out', text, waId: sent.id || '', by: user.name, source: 'hr', kind: 'text' }, user);
     return { status: 200, body: { sent: true } };
   } catch (e) {
-    return { status: 502, body: { sent: false, error: 'whatsapp_send_failed', detail: e.message } };
+    const w = windowError(e); w.body.sent = false;
+    return w;
   }
 }
 
@@ -212,12 +228,13 @@ async function pushItems(p, user) {
       if (it && it.type === 'letter') {
         if (typeof it.pdfBase64 === 'string' && it.pdfBase64.length > 100 && it.pdfBase64.length < MAX_PDF_B64) {
           cand.letterFile = str(it.filename, 150) || cand.letterFile || 'Offer_Letter.pdf';
+          cand.letterProtected = Boolean(it.protected);
           await store.put('letters', candidateId, { pdfBase64: it.pdfBase64, filename: cand.letterFile }, user);
           cand.letterMediaId = ''; cand.letterUploadedAt = ''; cand.hasLetter = true;
         }
         const mid = await letterMedia(store, candidateId, cand);
         if (!mid) return { status: 400, body: { sent, error: 'no_offer_letter' } };
-        const caption = `Your offer letter from ${cand.company || cand.clientLabel || 'us'}.`;
+        const caption = `Your offer letter from ${cand.company || cand.clientLabel || 'us'}.${letterNote(cand)}`;
         const r = await wa.sendDocument(cand.phone, mid, cand.letterFile, caption);
         cand.letterSent = true;
         await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: `[Offer letter PDF] ${caption}`, waId: r.id || '', by: user.name, source: 'journey', touchpoint: label, kind: 'document' }, user);
@@ -332,4 +349,65 @@ async function missingDetails(p) {
   return { status: 200, body: { missing: profile.missingByForm(cand), inProgress: Boolean(cand.details && cand.details.step) } };
 }
 
-module.exports = { startForOffer, handleInbound, sendManual, pushItems, askDetails, saveForms, sendForms, missingDetails };
+// The agent always answers with the client's latest facts (saved from Client setup); the candidate's own
+// offer line (role, joining date, pay, manager) is kept from their offer.
+async function withLatestFacts(store, cand) {
+  const client = cand.profile && cand.profile.client;
+  if (!client) return cand;
+  const f = await store.get('facts', String(client)).catch(() => null);
+  if (!f || !f.data || !f.data.facts) return cand;
+  const offerLine = String(cand.facts || '').split('\n').find(l => /^offer:/.test(l)) || '';
+  return Object.assign({}, cand, { facts: f.data.facts + (offerLine ? '\n' + offerLine : ''), faq: f.data.faq || cand.faq });
+}
+
+async function handleInbound(m) {
+  await handleInboundCore(m);
+  // The candidate just wrote, so the 24-hour window is open: send anything HR queued while it was closed.
+  const store = getStore();
+  if (store && m && m.from) await replayHeld(store, wa.candidateIdFor(m.from)).catch(e => console.error('replay failed', e && e.message));
+}
+
+/* ---------- messages held while the 24-hour window is closed ---------- */
+const HOLDABLE = ['push', 'text', 'docs', 'details', 'forms'];
+
+async function hold(candidateId, action, payload, user) {
+  const store = getStore();
+  if (!store || !HOLDABLE.includes(action)) return { status: 409, body: { error: 'window_closed' } };
+  const rec = await store.get('candidates', candidateId);
+  if (!rec) return { status: 404, body: { error: 'candidate_not_found' } };
+  const cand = Object.assign({}, rec.data);
+  const entry = { action, payload, by: user.name, at: new Date().toISOString() };
+  if (JSON.stringify(entry).length > 900000) return { status: 409, body: { error: 'window_closed' } };
+  cand.held = (cand.held || []).concat([entry]).slice(-10);
+  let nudged = false;
+  const tpl = (process.env.WHATSAPP_NUDGE_TEMPLATE || '').trim();
+  if (tpl && (!cand.nudgedAt || Date.now() - Date.parse(cand.nudgedAt) > 12 * 3600000)) {
+    try {
+      const first = (cand.profile && cand.profile.first) || (cand.name || '').split(' ')[0] || 'there';
+      const r = await wa.sendNamedTemplate(cand.phone, tpl, process.env.WHATSAPP_NUDGE_TEMPLATE_LANG || 'en', [first, 'your onboarding']);
+      cand.nudgedAt = new Date().toISOString(); nudged = true;
+      await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: `[Template ${tpl}] reminder to reply`, waId: r.id || '', by: user.name, source: 'system', kind: 'template' }, user);
+    } catch (e) { console.error('nudge failed', e && e.message); }
+  }
+  await store.put('candidates', candidateId, cand, user);
+  return { status: 202, body: { held: true, nudged, waiting: cand.held.length } };
+}
+
+async function replayHeld(store, candidateId) {
+  const rec = await store.get('candidates', candidateId);
+  if (!rec || !Array.isArray(rec.data.held) || !rec.data.held.length) return 0;
+  const held = rec.data.held;
+  await store.put('candidates', candidateId, Object.assign({}, rec.data, { held: [] }), { name: 'onboarding-agent' });
+  for (const h of held) {
+    const user = { name: h.by || 'onboarding-agent' };
+    const p = Object.assign({}, h.payload, { candidateId });
+    if (h.action === 'push') await pushItems(p, user);
+    else if (h.action === 'text') await sendManual(p, user);
+    else if (h.action === 'docs') await documents.request(store, candidateId, user);
+    else if (h.action === 'details') await askDetails(p, user);
+    else if (h.action === 'forms') await sendForms(p, user);
+  }
+  return held.length;
+}
+
+module.exports = { hold, replayHeld, withLatestFacts, startForOffer, handleInbound, sendManual, pushItems, askDetails, saveForms, sendForms, missingDetails };

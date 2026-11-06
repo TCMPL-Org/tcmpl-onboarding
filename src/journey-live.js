@@ -30,6 +30,19 @@ const PHASE_OF = {
   survey_d1: 'p90', week1: 'p90', pulse15: 'p90', pulse30: 'p90', pulse45: 'p90', pulse60: 'p90', pulse75: 'p90', final90: 'p90', m_1on1: 'p90', m_goals: 'p90', m_prob: 'p90'
 };
 const KIND_LABEL = { session: 'Meeting / connect', content: 'Deck or document', task: 'Task', quiz: 'Quiz' };
+// Day-1 readiness: which checklist tasks each owner step covers, and the candidate's WhatsApp checks.
+const OWNER_TASKS = { it_15: ['laptop', 'email', 'seat', 'card', 'cp*'], it_7: ['laptop', 'email', 'seat', 'card', 'cp*'], it_2: ['laptop', 'email', 'seat', 'card', 'cp*'], m_prep: ['welcome', 'buddy'], m_prep2: ['welcome', 'buddy'], ann: ['announce'], stat: ['statutory'] };
+const CHECKS = [
+  { id: 'email', k: 'email', day: -2, time: '10:00', phase: 'ready', label: 'Candidate check: email ID received?', text: 'Quick check before you join: have you received your company email ID and login details?' },
+  { id: 'card', k: 'card', day: 0, time: '11:00', phase: 'day1', label: 'Candidate check: access card?', text: 'Did you get your access card or ID badge?' },
+  { id: 'laptop', k: 'laptop', day: 0, time: '12:00', phase: 'day1', label: 'Candidate check: laptop working?', text: 'Is your laptop set up, and can you log in?' },
+  { id: 'buddy', k: 'buddy', day: 0, time: '16:00', phase: 'day1', label: 'Candidate check: met your buddy?', text: 'Have you met your buddy today?' }
+];
+const RST = { not_started: ['Not started', ''], requested: ['Requested', 'info'], done: ['Done', 'ok'], issue: ['Problem', 'bad'] };
+const dueOff = d => { const m = /^D([+-]\d+)$/.exec(d || ''); return m ? +m[1] : 0; };
+const emailIn = s => { const m = /([\w.+-]+@[\w-]+\.[\w.-]+)/.exec(s || ''); return m ? m[1] : ''; };
+let readyTpl = [];
+
 const IND_ST = { done: ['✓ Done', 'ok'], sent: ['Waiting for candidate', 'info'], not_yet: ['Not yet, will ask again', 'warn'], rescheduled: ['Rescheduled', 'info'], escalated: ['Needs HR: not confirmed', 'bad'], help: ['Needs HR: candidate asked for help', 'bad'], retry: ['Quiz not passed yet', 'warn'], failed: ['Needs HR: quiz not passed', 'bad'], skipped: ['Skipped', ''] };
 
 let cands = [], selected = null, plan = [], steps = [], sel = null, msgs = [], lastSig = '', docs = [], docEdit = null, health = {}, preview = null, plans = {}, missingQ = null;
@@ -43,7 +56,11 @@ const shortDate = iso => fmtDate(iso).replace(/ \d{4}$/, '');
 function fmtTime(iso) { return iso ? new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : ''; }
 const inr = n => n ? '₹' + Math.round(n).toLocaleString('en-IN') : '—';
 function addDays(iso, n) { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); if (!m) return ''; const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3] + n)); return d.toISOString().slice(0, 10); }
-const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+// "Today" for the candidate on screen: real time, or the Walkthrough clock when it has been moved.
+let clockOff = 0;
+const nowMs = () => Date.now() + clockOff;
+const todayIso = () => { const d = new Date(nowMs()); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const JUMPS = [[-28, 'D-28 Documents'], [-25, 'D-25 Resignation'], [-15, 'D-15 Owners'], [-7, 'D-7'], [-2, 'D-2'], [-1, 'D-1'], [0, 'Day 1'], [1, 'D+1'], [7, 'D+7'], [14, 'D+14'], [30, 'D+30'], [60, 'D+60'], [90, 'D+90']];
 
 function demoOn() { try { return localStorage.getItem(DEMO_KEY) === '1'; } catch { return false; } }
 function setDemo(on) { try { localStorage.setItem(DEMO_KEY, on ? '1' : '0'); } catch { /* storage unavailable */ } applyMode(); }
@@ -220,7 +237,37 @@ function indStatus(c, it) {
   return null;
 }
 
+function ownerTasks(key) {
+  const want = OWNER_TASKS[key] || [];
+  return readyTpl.filter(t => want.includes(t.k) || (want.includes('cp*') && t.k.startsWith('cp')));
+}
+function ownerStatus(c, s) {
+  const tasks = ownerTasks(s.key);
+  if (!tasks.length) return null;
+  const items = (c.readiness && c.readiness.items) || {};
+  const doj = (c.profile && c.profile.doj) || c.doj, today = todayIso();
+  const st = tasks.map(t => ({ t, i: items[t.k] || {}, due: addDays(doj, dueOff(t.due)) }));
+  if (st.some(x => x.i.status === 'issue')) return S('Needs HR: problem reported', 'bad', false, true);
+  if (st.every(x => x.i.status === 'done')) return S(`✓ Done (${st.length} of ${st.length})`, 'ok', true);
+  // From D-2, anything still open is escalated.
+  if (s.key === 'it_2' || s.key === 'm_prep2' ? s.date <= today : st.some(x => x.due < today && x.i.status !== 'done')) {
+    const open = st.filter(x => x.i.status !== 'done').length;
+    if (s.date <= today) return S(`Needs HR: ${open} still open`, 'bad', false, true);
+  }
+  if (st.some(x => x.i.status === 'requested')) return S(`Requested, ${st.filter(x => x.i.status === 'done').length} of ${st.length} done`, 'info', false, false, true);
+  return null;
+}
+function checkStatus(c, q) {
+  const r = c.readiness || {}, a = (r.asks || {})[q.id] || {};
+  if (a.answer === 'yes') return S('✓ Candidate said yes', 'ok', true);
+  if (a.answer === 'not_yet') return S('Needs HR: candidate says not yet', 'bad', false, true);
+  if (a.skipped) return S('Skipped (too late)', '', true);
+  if (a.sentAt) return S('Asked, waiting for reply', 'info', false, false, true);
+  return null;
+}
+
 function buildSteps(c) {
+  clockOff = +c.clockOffsetMs || 0;
   const out = [];
   const doj = (c.profile && c.profile.doj) || c.doj;
   const sent = c.touchpoints || {};
@@ -232,6 +279,10 @@ function buildSteps(c) {
     const kind = tp.key === 'docs' ? 'docs' : tp.key === 'confirm' ? 'forms' : tp.track !== 'c' ? 'owner' : 'tp';
     out.push({ id: 'tp:' + tp.key, key: tp.key, kind, phase, date: tp.date, rel: tp.rel, label: tp.label, track: tp.track, sentAt: sent[tp.key] && sent[tp.key].at });
   }
+  for (const q of CHECKS) {
+    if (!readyTpl.some(t => t.k === q.k)) continue;
+    out.push({ id: 'rc:' + q.id, kind: 'rcheck', q, phase: q.phase, date: addDays(doj, q.day), rel: q.day < 0 ? 'D' + q.day : 'D-day', label: q.label, track: 'c', time: q.time });
+  }
   for (const it of indItems || []) {
     out.push({ id: 'ind:' + it.id, kind: 'ind', item: it, phase: 'induct', date: addDays(doj, +it.day || 0), rel: 'Day ' + (+it.day || 0), label: it.title, track: 'c', time: it.time });
   }
@@ -241,7 +292,8 @@ function buildSteps(c) {
     if (s.kind === 'docs') st = docsStatus(c);
     else if (s.kind === 'forms') st = formsStatus(c);
     else if (s.kind === 'ind') st = indStatus(c, s.item);
-    else if (s.kind === 'owner') st = S('For ' + (s.track === 'm' ? 'the manager' : 'IT, Admin, Security'), '', false);
+    else if (s.kind === 'owner') st = ownerStatus(c, s);
+    else if (s.kind === 'rcheck') st = checkStatus(c, s.q);
     if (!st && s.sentAt) st = S('✓ Sent ' + fmtTime(s.sentAt), 'ok', true);
     if (!st) st = s.date <= today ? S('Due now', 'warn') : S('Upcoming', '');
     s.status = st;
@@ -252,7 +304,7 @@ function buildSteps(c) {
 }
 
 function phaseState(id) {
-  const ss = steps.filter(s => s.phase === id && s.kind !== 'owner');
+  const ss = steps.filter(s => s.phase === id);
   if (!ss.length) return 'empty';
   if (ss.some(s => s.status.red)) return 'red';
   if (ss.every(s => s.status.done)) return 'done';
@@ -269,13 +321,28 @@ function currentPhase() {
 function nextStep() {
   const today = todayIso();
   return steps.find(s => s.status.red)
-    || steps.find(s => s.kind !== 'owner' && !s.status.done && !s.status.waiting && s.date <= today)
-    || steps.find(s => s.kind !== 'owner' && !s.status.done && !s.status.waiting)
+    || steps.find(s => !s.status.done && !s.status.waiting && s.date <= today)
+    || steps.find(s => !s.status.done && !s.status.waiting)
     || steps.find(s => s.status.waiting);
 }
 
+function relDay(c) {
+  const doj = (c.profile && c.profile.doj) || c.doj; if (!doj) return '';
+  const d = Math.round((new Date(todayIso() + 'T00:00:00') - new Date(doj + 'T00:00:00')) / 864e5);
+  return d === 0 ? 'Day 1 (joining day)' : d < 0 ? `D${d}` : `D+${d}`;
+}
+
+async function walk(action, extra, okMsg) {
+  const c = current(); if (!c) return;
+  const r = await U().getJson('/api/notify/' + action, { method: 'POST', body: JSON.stringify(Object.assign({ candidateId: c.id }, extra)) }).catch(() => ({ ok: false }));
+  if (!r.ok) { U().toast('Not done: ' + ((r.body && (r.body.detail || r.body.error)) || 'please try again')); return; }
+  U().toast(okMsg || (action === 'run' ? (r.body.sent ? `Sent ${r.body.sent} due item(s).` : 'Nothing is due at this moment.') : 'Done.'));
+  if (action === 'reset') { sel = null; lastSig = ''; docs = []; }
+  await reload(selected);
+}
+
 /* ---------- rendering ---------- */
-function rerender() { const c = current(); if (!c) return; steps = buildSteps(c); renderStages(); renderTps(); renderStep(); renderPicker(); }
+function rerender() { const c = current(); if (!c) return; steps = buildSteps(c); renderHeader(); renderStages(); renderTps(); renderStep(); renderPicker(); }
 
 function renderAll() {
   if (!$('#jlive')) return;
@@ -287,6 +354,7 @@ function renderAll() {
   ['#jlCand', '#jlNext'].forEach(q => { $(q).disabled = none; });
   const c = current();
   plan = c && window.tcmplPlanFor ? (() => { try { return window.tcmplPlanFor(profileOf(c)); } catch (e) { console.warn(e); return []; } })() : [];
+  readyTpl = c && window.tcmplReadyFor ? (() => { try { return window.tcmplReadyFor(profileOf(c)) || []; } catch (e) { console.warn(e); return []; } })() : [];
   steps = c ? buildSteps(c) : [];
   if (c && !sel) { const n = nextStep(); sel = n ? n.id : null; preview = null; }
   renderPicker(); renderHeader(); renderStages(); renderTps(); renderStep(); renderFacts(); renderChat();
@@ -316,7 +384,8 @@ function renderHeader() {
   rk.textContent = 'Risk: ' + (sc >= 50 ? 'High' : sc >= 25 ? 'Medium' : 'Low');
   rk.className = 'chip ' + (sc >= 50 ? 'bad' : sc >= 25 ? 'warn' : 'ok');
   const w = windowState(c);
-  wn.textContent = w.open ? 'WhatsApp open until ' + w.until.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }) : 'Waiting for candidate to reply';
+  const held = (c.held || []).length;
+  wn.textContent = (w.open ? 'WhatsApp open until ' + w.until.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }) : 'Waiting for candidate to reply') + (held ? ` · ${held} message${held > 1 ? 's' : ''} queued` : '');
   wn.className = 'chip ' + (w.open ? 'teal' : 'warn');
   wn.title = w.open ? 'You can send any step until then.' : 'WhatsApp only allows free messages within 24 hours of the candidate\'s last message. Ask them to reply once (e.g. "Hi").';
   $('#jlName').textContent = c.name || '+' + c.phone;
@@ -332,8 +401,18 @@ function renderStages() {
   const ico = { done: '✓', red: '!', active: '●', todo: '○', empty: '–' };
   box.innerHTML = `<div class="jl-sb-head"><div><div class="lbl">${esc(c.name || '')} is at</div><div class="jl-sb-now">${esc(PHASES.find(p => p.id === cur).label)}</div></div>
     <div class="jl-sb-next">${ns ? `Next: <b>${esc(ns.label)}</b> <span class="chip ${ns.status.cls}">${esc(ns.status.text)}</span>` : 'All steps done'}</div></div>
-    <div class="jl-sb">${PHASES.map(p => { const st = phaseState(p.id); return `<button type="button" class="jl-sb-step ${st} ${p.id === cur ? 'cur' : ''}" data-ph="${p.id}"><span class="jl-sb-ico">${ico[st]}</span>${esc(p.label)}</button>`; }).join('')}</div>`;
-  box.querySelectorAll('[data-ph]').forEach(b => { b.onclick = () => { const s = steps.find(x => x.phase === b.dataset.ph && x.kind !== 'owner' && !x.status.done) || steps.find(x => x.phase === b.dataset.ph); if (s) selectStep(s.id, true); }; });
+    <div class="jl-sb">${PHASES.map(p => { const st = phaseState(p.id); return `<button type="button" class="jl-sb-step ${st} ${p.id === cur ? 'cur' : ''}" data-ph="${p.id}"><span class="jl-sb-ico">${ico[st]}</span>${esc(p.label)}</button>`; }).join('')}</div>
+    <div class="jl-walk"><span class="lbl">Walkthrough clock</span>
+      <span class="${clockOff ? 'chip warn' : 'note'}">${clockOff ? 'Simulated: ' + esc(new Date(nowMs()).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })) + ' · ' + esc(relDay(c)) : 'Real time'}</span>
+      <select id="jlJump" aria-label="Jump to day"><option value="">Jump to…</option>${JUMPS.map(([d, l]) => `<option value="${d}">${esc(l)}</option>`).join('')}</select>
+      <button class="btn small" id="jlRunDue" type="button" title="Send everything that is due at this moment (reminders, checks, induction, owner reminders)">Run due steps</button>
+      ${clockOff ? '<button class="btn small" id="jlReal" type="button">Back to real time</button>' : ''}
+      <button class="btn small" id="jlReset" type="button" title="Clear this candidate's journey and chat, and start the walkthrough again from the offer">Reset candidate</button></div>`;
+  $('#jlJump').onchange = () => { const v = $('#jlJump').value; if (v !== '') walk('jump', { day: +v, time: '10:30' }, `Clock moved to ${JUMPS.find(j => String(j[0]) === v)[1]}, 10:30. Click "Run due steps" to send what is due.`); };
+  $('#jlRunDue').onclick = () => walk('run', {}, null);
+  if ($('#jlReal')) $('#jlReal').onclick = () => walk('realtime', {}, 'Back to real time.');
+  $('#jlReset').onclick = () => { if (window.confirm(`Reset ${c.name}? This clears their documents, forms, readiness, induction and chat, and starts again from the offer.`)) walk('reset', {}, `${c.name} has been reset.`); };
+  box.querySelectorAll('[data-ph]').forEach(b => { b.onclick = () => { const s = steps.find(x => x.phase === b.dataset.ph && !x.status.done) || steps.find(x => x.phase === b.dataset.ph); if (s) selectStep(s.id, true); }; });
 }
 
 function renderTps() {
@@ -345,9 +424,9 @@ function renderTps() {
     const ss = steps.filter(s => s.phase === ph.id);
     if (!ss.length) continue;
     html += `<div class="jl-ph ${phaseState(ph.id)}" id="jlph-${ph.id}">${esc(ph.label)}</div>`;
-    html += ss.map(s => `<button type="button" class="tlitem jl-tp ${sel === s.id ? 'sel' : ''} ${s.kind === 'owner' ? 'off' : ''} ${ns && ns.id === s.id ? 'now' : ''}" data-id="${esc(s.id)}">
+    html += ss.map(s => `<button type="button" class="tlitem jl-tp ${sel === s.id ? 'sel' : ''} ${s.kind === 'owner' ? 'owner' : ''} ${ns && ns.id === s.id ? 'now' : ''}" data-id="${esc(s.id)}">
       <div class="when">${esc(s.rel)}<br><span style="font-weight:500">${esc(shortDate(s.date))}</span></div>
-      <div>${ns && ns.id === s.id ? '<span class="chip teal" style="float:right">Now</span>' : ''}${esc(s.label)}<div class="st"><span class="${s.status.cls ? 'jl-st-' + s.status.cls : 'note'}">${esc(s.status.text)}</span></div></div></button>`).join('');
+      <div>${ns && ns.id === s.id ? '<span class="chip teal" style="float:right">Now</span>' : ''}${s.kind === 'owner' ? '<div class="trk s">' + (s.track === 'm' ? 'Manager' : 'Owners') + '</div>' : ''}${esc(s.label)}<div class="st"><span class="${s.status.cls ? 'jl-st-' + s.status.cls : 'note'}">${esc(s.status.text)}</span></div></div></button>`).join('');
   }
   box.innerHTML = '<h3>Journey</h3>' + (html || '<p class="note">No steps set for this client.</p>');
   box.querySelectorAll('.jl-tp[data-id]').forEach(b => { b.onclick = () => selectStep(b.dataset.id); });
@@ -376,6 +455,8 @@ function renderStep() {
   if (s.kind === 'docs') return renderDocsStep(box, c, s, when);
   if (s.kind === 'forms') return renderFormsStep(box, c, s, when);
   if (s.kind === 'ind') return renderIndStep(box, c, s, when);
+  if (s.kind === 'owner' && ownerTasks(s.key).length) return renderOwnerStep(box, c, s, when);
+  if (s.kind === 'rcheck') return renderCheckStep(box, c, s, when);
   return renderMsgStep(box, c, s, when);
 }
 
@@ -389,8 +470,15 @@ function buildPreview(c, s) {
     else if (n.classList.contains('qr')) [...n.querySelectorAll('button')].forEach(b => buttons.push(b.textContent.trim()));
     else if (n.classList.contains('doc')) { if (/offer_letter/i.test(n.textContent)) letter = true; else extraDocs++; }
   }
-  return { id: s.id, text: texts.join('\n\n'), buttons: buttons.filter(Boolean), letter, extraDocs };
+  let text = texts.join('\n\n');
+  const map = nodes.map(n => (n.matches && n.matches('a.mapcard')) ? n : (n.querySelector && n.querySelector('a.mapcard'))).find(Boolean);
+  if (map && map.href && !text.includes(map.href)) text += '\n\nLocation on Google Maps: ' + map.href;
+  // The offer step asks for a clear answer.
+  const btns = s.key === 'offer' ? ['Accept offer', 'I have questions', 'Decline'] : buttons.filter(Boolean);
+  return { id: s.id, text, buttons: btns, letter, extraDocs };
 }
+
+const candEmail = c => c.email || (c.profile && c.profile.email) || '';
 
 function renderMsgStep(box, c, s, when) {
   if (!preview || preview.id !== s.id) preview = buildPreview(c, s);
@@ -400,7 +488,9 @@ function renderMsgStep(box, c, s, when) {
     ${!owner && preview.buttons.length ? `<div class="note" style="margin-top:8px">${btnOk ? 'Reply buttons:' : 'Reply options (sent as text):'}</div><div class="jl-btns">${preview.buttons.map(b => `<span class="chip teal">${esc(b)}</span>`).join('')}</div>
       <label class="note" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="jlPrevBtns" checked> Include reply ${btnOk ? 'buttons' : 'options'}</label>` : ''}
     ${!owner ? `<label class="note" style="display:flex;gap:6px;align-items:center;margin-top:6px"><input type="checkbox" id="jlPrevLetter" ${preview.letter ? 'checked' : ''}> Attach the offer letter PDF</label>` : ''}
-    ${preview.extraDocs && !owner ? `<p class="note">${preview.extraDocs} other attachment(s) in this step are examples only and are not sent.</p>` : ''}`;
+    ${preview.extraDocs && !owner ? `<p class="note">${preview.extraDocs} other attachment(s) in this step are examples only and are not sent.</p>` : ''}
+    ${!owner ? `<label class="note" style="display:flex;gap:6px;align-items:center;margin-top:6px"><input type="checkbox" id="jlPrevWa" checked> WhatsApp</label>
+      <label class="note" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="jlPrevEmail" ${health.email && candEmail(c) ? '' : 'disabled'}> Email to ${esc(candEmail(c) || 'candidate (no email on the offer)')}${health.email ? '' : ' (email not set up yet)'}</label>` : ''}`;
   box.innerHTML = panel({
     title: s.label, status: s.status, when,
     who: owner ? (s.track === 'm' ? 'For the manager, not the candidate' : 'For IT, Admin and Security, not the candidate') : 'To the candidate on WhatsApp',
@@ -411,6 +501,87 @@ function renderMsgStep(box, c, s, when) {
   });
   if ($('#jlPrevSend')) $('#jlPrevSend').onclick = () => sendPreview(s);
   if ($('#jlCopy')) $('#jlCopy').onclick = async () => { try { await navigator.clipboard.writeText($('#jlPrevText').value); U().toast('Message copied.'); } catch { U().toast('Select the text and copy it.'); } };
+}
+
+/* Day-1 readiness: owner tasks (email drafts from HR's own Outlook) */
+function mailFor(c, t, due) {
+  const p = c.profile || {};
+  const short = (window.tcmplShortName && window.tcmplShortName()) || c.clientLabel || '';
+  const subject = `New colleague joining on ${fmtDate(p.doj)}: ${t.task}`;
+  const body = `Hello,\n\n${c.name} joins ${short} as ${p.role || 'a new colleague'} on ${fmtDate(p.doj)}${p.mgr ? ', reporting to ' + p.mgr : ''}.\n\nPlease arrange: ${t.task}, by ${fmtDate(due)}.\n\nPlease reply to this email once it is done, so we can confirm Day 1 is ready.\n\nThank you`;
+  return { to: emailIn(t.owner), subject, body };
+}
+
+function renderOwnerStep(box, c, s, when) {
+  const tasks = ownerTasks(s.key);
+  const doj = (c.profile && c.profile.doj) || c.doj, today = todayIso();
+  const items = (c.readiness && c.readiness.items) || {};
+  const rows = tasks.map(t => {
+    const i = items[t.k] || {}, due = addDays(doj, dueOff(t.due));
+    const [lab, cls] = RST[i.status || 'not_started'];
+    const late = i.status !== 'done' && due < today;
+    return `<div class="jl-rt"><div><b>${esc(t.task)}</b><div class="note">${esc(t.owner)}${emailIn(t.owner) ? '' : ' · <i>no email set</i>'} · due ${esc(shortDate(due))}</div>
+      ${i.emailedAt ? `<div class="note">Emailed ${esc(fmtTime(i.emailedAt))}${i.reminderAt ? ' · reminder ' + esc(fmtTime(i.reminderAt)) : ''}${i.escalatedAt ? ' · escalated ' + esc(fmtTime(i.escalatedAt)) : ''}${i.ownerConfirmedAt ? ' · owner confirmed ✓' : ''}</div>` : ''}
+      ${i.candidate ? `<div class="note">${esc(i.candidate)}</div>` : ''}${i.note ? `<div class="note">${esc(i.note)}</div>` : ''}</div>
+      <div class="jl-rt-a"><span class="chip ${late && cls !== 'bad' ? 'bad' : cls}">${esc(late && i.status !== 'issue' ? 'Overdue' : lab)}</span>
+      <button class="btn small" data-mail="${esc(t.k)}" type="button">Email owner</button>
+      ${i.status !== 'done' ? `<button class="btn small" data-rs="done" data-k="${esc(t.k)}" type="button">Done</button>` : `<button class="btn small" data-rs="requested" data-k="${esc(t.k)}" type="button">Reopen</button>`}
+      ${i.status !== 'issue' ? `<button class="btn small" data-rs="issue" data-k="${esc(t.k)}" type="button">Problem</button>` : ''}</div></div>`;
+  }).join('');
+  const sample = tasks[0] ? mailFor(c, tasks[0], addDays(doj, dueOff(tasks[0].due))) : null;
+  box.innerHTML = panel({
+    title: s.label, status: s.status, when,
+    who: s.track === 'm' ? 'For the manager, not the candidate' : 'For IT, Admin and Security, not the candidate',
+    what: `<p style="margin:0">${health.email ? 'An email to each owner, with <b>Mark as done</b> and <b>Report a problem</b> buttons. They get a reminder the day before it is due; if it is still open the day after, HR is emailed and it turns red here.' : 'An email from your Outlook to each owner (automatic email is not set up yet). "Email owner" opens it ready to send and marks the task <i>Requested</i>.'}</p>
+      ${health.email ? '<label class="note" style="display:block;margin-top:8px">CC (optional, besides the client\'s default CC)<input id="jlOwnerCc" type="text" placeholder="manager@company.com, clienthr@company.com" style="width:100%;margin-top:4px"></label>' : ''}${sample ? `<details style="margin-top:6px"><summary class="note">See the email</summary><pre class="jl-mail">Subject: ${esc(sample.subject)}\n\n${esc(sample.body)}</pre></details>` : ''}<p class="note" style="margin:6px 0 0">Add owners' emails in Client setup → People, e.g. <i>Rohit Verma, IT &lt;rohit@company.com&gt;</i>.</p>`,
+    actions: '',
+    result: rows || '<p class="note">No tasks for this step.</p>'
+  });
+  box.querySelectorAll('[data-mail]').forEach(b => { b.onclick = async () => {
+    const t = tasks.find(x => x.k === b.dataset.mail); const dueDate = addDays(doj, dueOff(t.due)); const m = mailFor(c, t, dueDate);
+    if (health.email) {
+      if (!m.to) { U().toast(`No email for ${t.owner}. Add it in Client setup → People, e.g. ${t.owner} <name@company.com>.`); return; }
+      b.disabled = true;
+      const r = await U().getJson('/api/notify/owner', { method: 'POST', body: JSON.stringify({ candidateId: c.id, k: t.k, task: t.task, owner: t.owner, cc: ($('#jlOwnerCc') || {}).value || '', subject: m.subject, body: m.body, dueDate }) }).catch(() => ({ ok: false }));
+      b.disabled = false;
+      if (!r.ok) { U().toast('Email not sent: ' + ((r.body && (r.body.detail || r.body.error)) || 'error')); return; }
+      U().toast(`Emailed ${r.body.to.join(', ')}${r.body.cc.length ? ' (cc ' + r.body.cc.join(', ') + ')' : ''}.`);
+      const i = cands.findIndex(x => x.id === c.id); if (i >= 0) cands[i].readiness = r.body.readiness;
+      rerender(); return;
+    }
+    window.location.href = `mailto:${encodeURIComponent(m.to)}?subject=${encodeURIComponent(m.subject)}&body=${encodeURIComponent(m.body)}`;
+    if (((c.readiness && c.readiness.items) || {})[t.k]?.status !== 'done') readyUpdate(c, t.k, 'requested', 'Email drafted to ' + (m.to || t.owner));
+  }; });
+  box.querySelectorAll('[data-rs]').forEach(b => { b.onclick = () => {
+    let note;
+    if (b.dataset.rs === 'issue') { note = window.prompt('What is the problem? (saved for the record)', ''); if (note === null) return; }
+    readyUpdate(c, b.dataset.k, b.dataset.rs, note);
+  }; });
+}
+
+async function readyUpdate(c, k, status, note) {
+  const r = await U().getJson('/api/induction/ready-update', { method: 'POST', body: JSON.stringify({ candidateId: c.id, k, status, note }) }).catch(() => ({ ok: false }));
+  if (!r.ok) { U().toast('Not saved. Please try again.'); return; }
+  const i = cands.findIndex(x => x.id === c.id); if (i >= 0) cands[i].readiness = r.body.readiness;
+  rerender();
+}
+
+/* Day-1 readiness: the candidate's own check on WhatsApp */
+function renderCheckStep(box, c, s, when) {
+  const q = s.q, r = c.readiness || {}, a = (r.asks || {})[q.id] || {}, item = (r.items || {})[q.k] || {};
+  box.innerHTML = panel({
+    title: s.label, status: s.status, when, who: 'To the candidate on WhatsApp',
+    what: `<p style="margin:0"><i>"${esc(q.text)}"</i> with <b>Yes</b> / <b>Not yet</b>. Yes marks the task done; Not yet flags it to HR and the owner.</p><p class="note" style="margin:6px 0 0">${health.scheduler ? 'Goes automatically on its date and time.' : 'Automatic sending is not set up yet: use the button.'}</p>`,
+    actions: `<button class="btn primary" id="jlRcNow" type="button">${a.sentAt ? 'Ask again now' : 'Send now'}</button>`,
+    result: a.sentAt ? `<p style="margin:0">Asked ${esc(fmtTime(a.sentAt))}${a.answer ? ` · answer: <b>${a.answer === 'yes' ? 'Yes' : 'Not yet'}</b> ${esc(fmtTime(a.answeredAt))}` : ''}${item.status ? ` · task: ${esc(RST[item.status][0])}` : ''}</p>` : ''
+  });
+  $('#jlRcNow').onclick = async () => {
+    $('#jlRcNow').disabled = true;
+    const res = await U().getJson('/api/induction/ready-ask', { method: 'POST', body: JSON.stringify({ candidateId: c.id, qid: q.id }) }).catch(() => ({ ok: false }));
+    if (res.ok && res.body.held) U().toast('WhatsApp window is closed: it goes out when the candidate next writes.');
+    else if (res.ok) U().toast('Sent to ' + c.name + '.'); else U().toast(U().explain(res));
+    await reload(selected);
+  };
 }
 
 /* documents step */
@@ -561,7 +732,8 @@ function renderChat() {
 /* ---------- actions ---------- */
 async function afterSend(r, okMsg) {
   const u = U();
-  if (r.ok) { u.toast(okMsg); await reload(selected); } else u.toast(u.explain(r));
+  if (r.ok && r.body && r.body.held) { const c = current(); u.toast(`WhatsApp only allows messages within 24 hours of ${c ? c.first || c.name : 'the candidate'}'s last reply. Saved: it goes out automatically as soon as they write.`); await reload(selected); }
+  else if (r.ok) { u.toast(okMsg); await reload(selected); } else u.toast(u.explain(r));
 }
 
 async function askDocs() {
@@ -618,7 +790,7 @@ async function sendPreview(s) {
     const it = { type: 'letter' };
     const cur = window.tcmplCurrent && window.tcmplCurrent();
     const pdf = window.tcmplLetterPdf && window.tcmplLetterPdf();
-    if (cur && U().candId(cur.mobile) === c.id && pdf && pdf.blob instanceof Blob) { it.pdfBase64 = await U().blobToBase64(pdf.blob); it.filename = pdf.name; }
+    if (cur && U().candId(cur.mobile) === c.id && pdf && pdf.blob instanceof Blob) { it.pdfBase64 = await U().blobToBase64(pdf.blob); it.filename = pdf.name; it.protected = !!pdf.protected; }
     items.push(it);
   }
   if (text) {
@@ -630,11 +802,18 @@ async function sendPreview(s) {
     }
     items.push(it);
   }
+  const viaWa = !$('#jlPrevWa') || $('#jlPrevWa').checked, viaEmail = $('#jlPrevEmail') && $('#jlPrevEmail').checked;
+  if (!viaWa && !viaEmail) { U().toast('Choose WhatsApp, email or both.'); return; }
   if (!items.length) { U().toast('Nothing to send.'); return; }
   $('#jlPrevSend').disabled = true;
+  if (viaEmail) {
+    const er = await U().getJson('/api/notify/candidate', { method: 'POST', body: JSON.stringify({ candidateId: c.id, key: s.key, subject: `${s.label} · ${c.clientLabel || ''}`.replace(/ · $/, ''), body: text }) }).catch(() => ({ ok: false }));
+    if (!er.ok) U().toast('Email not sent: ' + ((er.body && (er.body.detail || er.body.error)) || 'error'));
+    else if (!viaWa) { $('#jlPrevSend').disabled = false; await afterSend(er, `Emailed "${s.label}" to ${c.name}.`); return; }
+  }
   const r = await U().push(c.id, items, s.label, s.key);
   if ($('#jlPrevSend')) $('#jlPrevSend').disabled = false;
-  await afterSend(r, `Sent "${s.label}" to ${c.name} on WhatsApp.`);
+  await afterSend(r, `Sent "${s.label}" to ${c.name}${viaEmail ? ' on WhatsApp and email' : ' on WhatsApp'}.`);
 }
 
 async function sendLetter() {
@@ -650,10 +829,27 @@ async function sendOwn(e) {
   $('#jlSend').disabled = true;
   const r = await U().getJson('/api/wa/send', { method: 'POST', body: JSON.stringify({ candidateId: c.id, text }) }).catch(() => ({ ok: false }));
   $('#jlSend').disabled = false;
-  if (r.ok) { $('#jlText').value = ''; loadMsgs(true); } else U().toast(U().explain(r));
+  if (r.ok && r.body && r.body.held) { $('#jlText').value = ''; await afterSend(r, ''); }
+  else if (r.ok) { $('#jlText').value = ''; loadMsgs(true); } else U().toast(U().explain(r));
 }
 
-window.tcmplLive = { reload };
+// HR view: one candidate's stage, next step and what needs HR, using the same rules as this screen.
+async function summary(c, allDocs) {
+  const keep = [plan, readyTpl, docs, steps];
+  try {
+    plan = window.tcmplPlanFor ? window.tcmplPlanFor(profileOf(c)) : [];
+    readyTpl = window.tcmplReadyFor ? window.tcmplReadyFor(profileOf(c)) || [] : [];
+    docs = (allDocs || []).filter(d => d.candidateId === c.id);
+    await loadPlan(c);
+    const st = buildSteps(c);
+    steps = st;
+    const ph = PHASES.find(p => p.id === currentPhase());
+    const ns = nextStep();
+    return { phase: ph.label, phaseId: ph.id, next: ns ? ns.label : '', nextStatus: ns ? ns.status : null, red: st.filter(x => x.status.red).map(x => x.label), done: st.filter(x => x.status.done).length, total: st.length, stages: PHASES.map(p => ({ id: p.id, label: p.label, state: phaseState(p.id) })) };
+  } finally { [plan, readyTpl, docs, steps] = keep; }
+}
+
+window.tcmplLive = { reload, summary, open(id, stepId) { const b = document.querySelector('nav.tabs button[data-tab="journey"]'); if (b) b.click(); setTimeout(() => reload(id, stepId), 50); } };
 
 (function waitForApp(n) {
   if (window.tcmplWAUtil && mount()) return;

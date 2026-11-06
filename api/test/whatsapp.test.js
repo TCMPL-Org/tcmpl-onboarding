@@ -132,12 +132,15 @@ test('HR sends a prepared touchpoint: buttons + offer letter, letter first', asy
   assert.equal(cand.profile.doj, '2026-12-01');
 });
 
-test('sending after the 24-hour window explains the problem', async () => {
+test('sending after the 24-hour window keeps the message to send when the candidate writes', async () => {
   setEnv(); sent.length = 0;
   global.fetch = async () => ({ ok: false, status: 400, json: async () => ({ error: { message: 'Re-engagement message', code: 131047 } }) });
   const r = await handlers.waPush({ user, body: { candidateId: 'wa-919810000000', items: [{ type: 'text', text: 'Reminder' }] } });
-  assert.equal(r.status, 409);
-  assert.equal(r.jsonBody.error, 'window_closed');
+  assert.equal(r.status, 202);
+  assert.equal(r.jsonBody.held, true);
+  const c = (await getStore().get('candidates', 'wa-919810000000')).data;
+  assert.equal(c.held[0].payload.items[0].text, 'Reminder');
+  await getStore().put('candidates', 'wa-919810000000', Object.assign({}, c, { held: [] }), user);
 });
 
 test('push needs a registered candidate', async () => {

@@ -6,6 +6,10 @@ const crypto = require('node:crypto');
 const wa = require('./whatsapp');
 const blob = require('./blob');
 const induction = require('./induction');
+const readiness = require('./readiness');
+const notify = require('./notify');
+const links = require('./links');
+const emailLib = require('./email');
 const { getStore } = require('./store');
 
 const SYSTEM = { name: 'onboarding-agent' };
@@ -39,7 +43,7 @@ function windowClosed(e) {
 // Sends messages in order. If WhatsApp refuses because the 24-hour window is closed, the rest are held on the
 // candidate (induction.waiting) and go out when the candidate next writes; an approved "nudge" template
 // (WHATSAPP_NUDGE_TEMPLATE, body {{1}} = first name, {{2}} = what it's about) asks them to reply.
-async function deliver(store, candidateId, cand, msgs, by, about) {
+async function deliver(store, candidateId, cand, msgs, by, about, source = 'induction') {
   let sent = 0;
   for (let i = 0; i < msgs.length; i++) {
     const r = msgs[i];
@@ -57,7 +61,7 @@ async function deliver(store, candidateId, cand, msgs, by, about) {
         text = r.text;
       }
       sent++;
-      await saveOut(store, candidateId, text, waId, '', by, r.file ? 'document' : r.buttons ? 'interactive' : 'text');
+      await saveOut(store, candidateId, text, waId, '', by, r.file ? 'document' : r.buttons ? 'interactive' : 'text', source);
     } catch (e) {
       if (windowClosed(e)) {
         const ind = cand.induction = Object.assign({ items: {} }, cand.induction);
@@ -82,34 +86,96 @@ async function deliver(store, candidateId, cand, msgs, by, about) {
   return { sent };
 }
 
-async function saveOut(store, candidateId, text, waId, error, by, kind) {
-  await store.put('messages', newId('o'), { candidateId, direction: 'out', text, waId, error, source: 'induction', kind, at: new Date().toISOString() }, by || SYSTEM);
+async function saveOut(store, candidateId, text, waId, error, by, kind, source = 'induction') {
+  await store.put('messages', newId('o'), { candidateId, direction: 'out', text, waId, error, source, kind, at: new Date().toISOString() }, by || SYSTEM);
 }
 
-// Scheduler: send everything that is due, for every candidate. Stops before the function time limit.
-async function tick(now = Date.now(), budgetMs = 35000) {
+// The candidate's own clock: real time, or moved by the Walkthrough clock (clockOffsetMs) for demos.
+const nowFor = (cand, now = Date.now()) => now + (+cand.clockOffsetMs || 0);
+const IST = 330 * 60000;
+const atIst = (iso, hh = 10) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], hh) - IST : null; };
+
+// Everything due for one candidate at its (possibly simulated) time. Mutates cand; returns the number of sends.
+async function runCandidate(store, id, cand, plans, realNow = Date.now()) {
+  const clientId = cand.profile && cand.profile.client;
+  if (!clientId || !cand.phone) return 0;
+  if (!(clientId in plans)) plans[clientId] = await planFor(store, clientId);
+  const now = nowFor(cand, realNow);
+  let sends = 0;
+  // 1. WhatsApp: Day-1 readiness checks first (time-critical), then induction.
+  let due = readiness.due(cand, now);
+  if (!due.length && plans[clientId]) due = induction.due(cand, plans[clientId], now);
+  const norm = plans[clientId] ? induction.normalizePlan(plans[clientId]) : { items: [] };
+  for (const g of due) {
+    await deliver(store, id, cand, g.msgs, SYSTEM, g.msgs[0] && (g.msgs[0].caption || String(g.msgs[0].text || '').split('\n')[0]));
+    sends++;
+    // A meeting's "did it happen?" also goes to its owner by email, with one-click answers.
+    const it = norm.items.find(x => x.id === g.id);
+    const ownerTo = it && it.kind === 'session' && g.pending && g.pending.type === 'check' ? emailLib.addresses(it.owner) : [];
+    const st = it && (cand.induction.items || {})[it.id];
+    if (ownerTo.length && st && !st.ownerAskedAt) {
+      const ok = await notify.auto(store, id, cand, {
+        to: ownerTo, kind: 'induction-owner', k: it.id,
+        subject: `Did "${it.title}" with ${cand.name} happen?`,
+        text: `Hello,\n\n"${it.title}" with ${cand.name} was planned for this time. Please let us know if it happened.`,
+        buttons: [{ label: 'Yes, it happened', url: links.link({ c: id, k: it.id, a: 'ind-yes', t: it.title }) }, { label: 'Not yet', url: links.link({ c: id, k: it.id, a: 'ind-no', t: it.title }), secondary: true }].filter(b => b.url)
+      });
+      if (ok) st.ownerAskedAt = new Date(now).toISOString();
+    }
+  }
+  // 2. Owners: reminder the day before the due date, escalation to HR the day after.
+  const r = cand.readiness && cand.readiness.items;
+  if (r) {
+    const st = await notify.settings(store, clientId);
+    for (const [k, it] of Object.entries(r)) {
+      if (it.status === 'done' || !it.ownerEmail || !it.dueDate) continue;
+      const dueAt = atIst(it.dueDate, 10);
+      if (!dueAt) continue;
+      if (!it.reminderAt && now >= dueAt - 864e5 && now < dueAt + 864e5 && it.status !== 'issue') {
+        const ok = await notify.auto(store, id, cand, {
+          to: it.ownerEmail, cc: it.cc, kind: 'owner-reminder', k,
+          subject: `Reminder: ${it.task || k} for ${cand.name} is due ${it.dueDate}`,
+          text: `Hello,\n\nA reminder that "${it.task || k}" for ${cand.name} is due on ${it.dueDate}. If it is already done, please click below.`,
+          buttons: [{ label: 'Mark as done', url: links.link({ c: id, k, a: 'done' }) }, { label: 'Report a problem', url: links.link({ c: id, k, a: 'issue' }), secondary: true }].filter(b => b.url)
+        });
+        if (ok) { it.reminderAt = new Date(now).toISOString(); sends++; }
+      }
+      if (!it.escalatedAt && now >= dueAt + 864e5) {
+        const hr = notify.hrAddress(st);
+        it.escalatedAt = new Date(now).toISOString();
+        cand.handovers = (cand.handovers || []).concat([{ why: `Day-1 readiness overdue: "${it.task || k}" (owner ${it.ownerEmail})`, at: it.escalatedAt, open: true }]);
+        if (hr) {
+          const ok = await notify.auto(store, id, cand, {
+            to: hr, cc: it.ownerEmail, kind: 'owner-escalation', k,
+            subject: `Overdue for ${cand.name}: ${it.task || k}`,
+            text: `"${it.task || k}" for ${cand.name} was due on ${it.dueDate} and is still not marked done by ${it.ownerEmail}.`,
+            buttons: [{ label: 'Mark as done', url: links.link({ c: id, k, a: 'done' }) }].filter(b => b.url)
+          });
+          if (ok) sends++;
+        }
+      }
+    }
+  }
+  if (sends) cand.lastMessageAt = new Date().toISOString();
+  return sends;
+}
+
+// Scheduler: everything due for every candidate. Stops before the function time limit.
+async function tick(realNow = Date.now(), budgetMs = 35000) {
   const store = getStore();
   if (!store || !wa.waConfigured()) return { ok: false, reason: 'not_configured' };
   const started = Date.now();
   const plans = {};
-  let candidates = 0, groups = 0;
+  let candidates = 0, sent = 0;
   for (const rec of await store.list('candidates')) {
     if (Date.now() - started > budgetMs) break;
     const cand = Object.assign({}, rec.data);
-    const clientId = cand.profile && cand.profile.client;
-    if (!clientId || !cand.phone) continue;
-    if (!(clientId in plans)) plans[clientId] = await planFor(store, clientId);
-    if (!plans[clientId]) continue;
-    const before = JSON.stringify(cand.induction || null);
-    const due = induction.due(cand, plans[clientId], now);
-    for (const g of due) { await deliver(store, rec.id, cand, g.msgs, SYSTEM, g.msgs[0] && (g.msgs[0].caption || String(g.msgs[0].text || '').split('\n')[0])); groups++; }
-    if (due.length || JSON.stringify(cand.induction || null) !== before) {
-      if (due.length) cand.lastMessageAt = new Date().toISOString();
-      await store.put('candidates', rec.id, cand, SYSTEM);
-      candidates++;
-    }
+    const before = JSON.stringify([cand.induction || null, cand.readiness || null, (cand.handovers || []).length]);
+    const n = await runCandidate(store, rec.id, cand, plans, realNow);
+    sent += n;
+    if (n || JSON.stringify([cand.induction || null, cand.readiness || null, (cand.handovers || []).length]) !== before) { await store.put('candidates', rec.id, cand, SYSTEM); candidates++; }
   }
-  return { ok: true, candidates, sent: groups, ms: Date.now() - started };
+  return { ok: true, candidates, sent, ms: Date.now() - started };
 }
 
 // HR: send one milestone now (for testing, or to resend).
@@ -163,4 +229,31 @@ async function contentFile(id) {
   return { status: 200, buffer: f.buffer, contentType: rec.data.mime || f.contentType, name: rec.data.name };
 }
 
-module.exports = { planFor, deliver, tick, sendNow, uploadContent, contentFile };
+// Day-1 readiness: HR updates a task, or sends a candidate check now.
+async function readyAction(action, p, user) {
+  const store = getStore();
+  if (!store) return { status: 503, body: { error: 'database_not_configured' } };
+  const candidateId = str(p && p.candidateId, 40);
+  const rec = /^wa-\d{11,15}$/.test(candidateId) ? await store.get('candidates', candidateId) : null;
+  if (!rec) return { status: 404, body: { error: 'candidate_not_found' } };
+  const cand = Object.assign({}, rec.data);
+  if (action === 'update') {
+    const r = readiness.update(cand, p, user);
+    if (r.error) return { status: 400, body: r };
+    await store.put('candidates', candidateId, cand, user);
+    return { status: 200, body: { item: r.item, readiness: cand.readiness } };
+  }
+  if (action === 'ask') {
+    if (!wa.waConfigured()) return { status: 503, body: { error: 'whatsapp_not_configured' } };
+    const q = readiness.sendNow(cand, str(p.qid, 20));
+    if (!q) return { status: 404, body: { error: 'question_not_found' } };
+    const d = await deliver(store, candidateId, cand, q.msgs, user, 'Day-1 check');
+    cand.lastMessageAt = new Date().toISOString();
+    await store.put('candidates', candidateId, cand, user);
+    if (d.error) return { status: 502, body: { error: 'whatsapp_send_failed', detail: d.error } };
+    return { status: 200, body: d };
+  }
+  return { status: 404, body: { error: 'unknown_action' } };
+}
+
+module.exports = { planFor, deliver, tick, runCandidate, nowFor, sendNow, uploadContent, contentFile, readyAction };
