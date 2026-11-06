@@ -7,6 +7,7 @@ const wa = require('./whatsapp');
 const blob = require('./blob');
 const induction = require('./induction');
 const readiness = require('./readiness');
+const checkins = require('./checkins');
 const notify = require('./notify');
 const links = require('./links');
 const emailLib = require('./email');
@@ -15,6 +16,21 @@ const { getStore } = require('./store');
 const SYSTEM = { name: 'onboarding-agent' };
 const newId = p => `${p}-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
 const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
+
+// Journey check-ins setup for a client (TCMPL default when not configured).
+async function setupFor(store, clientId) {
+  if (!clientId) return checkins.defaults();
+  const rec = await store.get('journeys', String(clientId)).catch(() => null);
+  return rec && rec.data && rec.data.checkins ? checkins.cleanSetup(rec.data.checkins) : checkins.defaults();
+}
+
+// Titles of induction milestones that are not done yet.
+function openInduction(cand, plan) {
+  if (!plan) return [];
+  const items = induction.normalizePlan(plan).items;
+  const st = (cand.induction && cand.induction.items) || {};
+  return items.filter(it => !['done', 'skipped'].includes((st[it.id] || {}).status)).map(it => it.title);
+}
 
 async function planFor(store, clientId) {
   if (!clientId) return null;
@@ -123,7 +139,19 @@ async function runCandidate(store, id, cand, plans, realNow = Date.now()) {
       if (ok) st.ownerAskedAt = new Date(now).toISOString();
     }
   }
-  // 2. Owners: reminder the day before the due date, escalation to HR the day after.
+  // 2. Journey check-ins (pre-joining, surveys, infra, manager/HR check-ins, closure): WhatsApp and/or email.
+  const ckKey = 'ck:' + clientId;
+  if (!(ckKey in plans)) plans[ckKey] = await setupFor(store, clientId);
+  const setup = plans[ckKey];
+  const hrSt = await notify.settings(store, clientId);
+  const ctx = {
+    waBusy: due.length > 0 || Boolean((cand.readiness && cand.readiness.pending && now - Date.parse(cand.readiness.pending.at) < 2 * 3600000) || (cand.induction && cand.induction.pending && cand.induction.pending.at && now - Date.parse(cand.induction.pending.at) < 2 * 3600000)),
+    pending: openInduction(cand, plans[clientId]), hrEmail: (setup.contacts && setup.contacts.hr) || notify.hrAddress(hrSt), link: links.link, candidateId: id
+  };
+  for (const c of checkins.due(cand, setup, now, ctx)) {
+    sends += await sendCheckin(store, id, cand, c, SYSTEM, ctx);
+  }
+  // 3. Owners: reminder the day before the due date, escalation to HR the day after.
   const r = cand.readiness && cand.readiness.items;
   if (r) {
     const st = await notify.settings(store, clientId);
@@ -160,6 +188,27 @@ async function runCandidate(store, id, cand, plans, realNow = Date.now()) {
   return sends;
 }
 
+// Delivers one check-in (WhatsApp, email, or an escalation to HR). Returns the number of sends.
+async function sendCheckin(store, id, cand, c, by, ctx) {
+  let n = 0;
+  if (c.escalate) {
+    const hr = ctx.hrEmail;
+    if (hr) {
+      const ok = await notify.auto(store, id, cand, { to: hr, kind: 'checkin-escalation', k: c.key, subject: `No answer: ${c.item.title} · ${cand.name || ''}`, text: `"${c.item.title}" for ${cand.name || 'the new joiner'} has not been answered after a reminder. It is flagged in the Candidate journey.` });
+      if (ok) n++;
+    }
+    return n;
+  }
+  if (c.wa) { await deliver(store, id, cand, c.wa, by, c.item.title, 'checkin'); n++; }
+  if (c.email) {
+    const ok = await notify.auto(store, id, cand, Object.assign({ kind: 'checkin', k: c.key }, c.email));
+    const a = cand.checkins && cand.checkins.asks[c.key];
+    if (a) { if (ok) a.emailedAt = new Date().toISOString(); else a.emailError = 'Email not sent (email not set up or address invalid)'; }
+    if (ok) n++;
+  }
+  return n;
+}
+
 // Scheduler: everything due for every candidate. Stops before the function time limit.
 async function tick(realNow = Date.now(), budgetMs = 35000) {
   const store = getStore();
@@ -170,10 +219,10 @@ async function tick(realNow = Date.now(), budgetMs = 35000) {
   for (const rec of await store.list('candidates')) {
     if (Date.now() - started > budgetMs) break;
     const cand = Object.assign({}, rec.data);
-    const before = JSON.stringify([cand.induction || null, cand.readiness || null, (cand.handovers || []).length]);
+    const before = JSON.stringify([cand.induction || null, cand.readiness || null, cand.checkins || null, (cand.handovers || []).length]);
     const n = await runCandidate(store, rec.id, cand, plans, realNow);
     sent += n;
-    if (n || JSON.stringify([cand.induction || null, cand.readiness || null, (cand.handovers || []).length]) !== before) { await store.put('candidates', rec.id, cand, SYSTEM); candidates++; }
+    if (n || JSON.stringify([cand.induction || null, cand.readiness || null, cand.checkins || null, (cand.handovers || []).length]) !== before) { await store.put('candidates', rec.id, cand, SYSTEM); candidates++; }
   }
   return { ok: true, candidates, sent, ms: Date.now() - started };
 }
@@ -256,4 +305,51 @@ async function readyAction(action, p, user) {
   return { status: 404, body: { error: 'unknown_action' } };
 }
 
-module.exports = { planFor, deliver, tick, runCandidate, nowFor, sendNow, uploadContent, contentFile, readyAction };
+// Journey check-ins: HR saves the setup, sends one now, or sets a candidate's manager / buddy email.
+async function checkinAction(action, p, user) {
+  const store = getStore();
+  if (!store) return { status: 503, body: { error: 'database_not_configured' } };
+  if (action === 'setup' || action === 'save') {
+    const client = str(p && p.client, 60).replace(/[^\w-]/g, '');
+    if (!client) return { status: 400, body: { error: 'client_required' } };
+    if (action === 'setup') { const setup = await setupFor(store, client); return { status: 200, body: { setup, defaults: checkins.defaults(), occ: checkins.occurrences(setup).map(o => ({ key: o.key, day: o.day, item: o.item })) } }; }
+    const rec = await store.get('journeys', client);
+    const setup = checkins.cleanSetup(p.setup);
+    const data = Object.assign({}, rec && rec.data, { client, checkins: setup, updated: new Date().toISOString() });
+    await store.put('journeys', client, data, user);
+    return { status: 200, body: { setup } };
+  }
+  const candidateId = str(p && p.candidateId, 40);
+  const rec = /^wa-\d{11,15}$/.test(candidateId) ? await store.get('candidates', candidateId) : null;
+  if (!rec) return { status: 404, body: { error: 'candidate_not_found' } };
+  const cand = Object.assign({}, rec.data);
+  if (action === 'contacts') {
+    cand.contacts = { manager: emailLib.addresses(p.manager).join(', '), buddy: emailLib.addresses(p.buddy).join(', ') };
+    await store.put('candidates', candidateId, cand, user);
+    return { status: 200, body: { contacts: cand.contacts } };
+  }
+  if (action === 'answer') {
+    const setup = await setupFor(store, cand.profile && cand.profile.client);
+    const r = checkins.record(cand, setup, str(p.key, 80), str(p.value, 300), user.name);
+    await store.put('candidates', candidateId, cand, user);
+    return { status: 200, body: { flagged: r.flagged, checkins: cand.checkins } };
+  }
+  if (action === 'send') {
+    const clientId = cand.profile && cand.profile.client;
+    const setup = await setupFor(store, clientId);
+    const hrSt = await notify.settings(store, clientId);
+    const ctx = { pending: openInduction(cand, await planFor(store, clientId)), hrEmail: (setup.contacts && setup.contacts.hr) || notify.hrAddress(hrSt), link: links.link, candidateId };
+    const c = checkins.sendNow(cand, setup, str(p.key, 80), ctx);
+    if (!c) return { status: 404, body: { error: 'checkin_not_found' } };
+    if (c.error) return { status: 400, body: { error: c.error, detail: c.error.startsWith('no_') ? 'Add the ' + c.error.slice(3, -6) + ' email in Client setup → Journey setup, or for this candidate in the step.' : '' } };
+    if (c.wa && !wa.waConfigured()) return { status: 503, body: { error: 'whatsapp_not_configured' } };
+    const before = (cand.emails || []).length;
+    const n = await sendCheckin(store, candidateId, cand, c, user, ctx);
+    cand.lastMessageAt = new Date().toISOString();
+    await store.put('candidates', candidateId, cand, user);
+    return { status: 200, body: { sent: n, emailed: (cand.emails || []).length > before, held: Boolean(cand.induction && cand.induction.waiting && cand.induction.waiting.length) } };
+  }
+  return { status: 404, body: { error: 'unknown_action' } };
+}
+
+module.exports = { setupFor, checkinAction, sendCheckin, planFor, deliver, tick, runCandidate, nowFor, sendNow, uploadContent, contentFile, readyAction };

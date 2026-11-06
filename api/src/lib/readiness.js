@@ -44,6 +44,8 @@ function due(cand, now = Date.now()) {
   if (h < QUIET.from || h >= QUIET.to) return [];
   const r = state(cand);
   if (r.pending && now - Date.parse(r.pending.at) < 2 * H) return [];
+  const ck = cand.checkins && cand.checkins.pending;
+  if (ck && now - Date.parse(ck.at) < 2 * H) return []; // a journey check-in question is open
   const off = Array.isArray(r.off) ? r.off : [];
   for (const q of QUESTIONS) {
     if (off.includes(q.k) || (r.asks[q.id] && r.asks[q.id].sentAt)) continue;

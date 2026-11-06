@@ -98,6 +98,8 @@ function due(cand, planRec, now = Date.now()) {
   if (hour < QUIET.from || hour >= QUIET.to) return [];
   const ind = cand.induction = Object.assign({ items: {} }, cand.induction);
   if (ind.pending && ind.pending.at && now - Date.parse(ind.pending.at) < 2 * H) return []; // wait for the open question first
+  const ck = cand.checkins && cand.checkins.pending;
+  if (ck && now - Date.parse(ck.at) < 2 * H) return []; // a journey check-in question is open
   const out = [];
   for (const it of plan.items) {
     const st = ind.items[it.id] = Object.assign({}, ind.items[it.id]);

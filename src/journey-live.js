@@ -20,8 +20,13 @@ const PHASES = [
   { id: 'ready', label: 'Day-1 readiness' },
   { id: 'day1', label: 'Joining day' },
   { id: 'induct', label: 'Induction' },
-  { id: 'p90', label: 'First 90 days' }
+  { id: 'p90', label: 'First 90 days' },
+  { id: 'close', label: 'Closure' }
 ];
+// Legacy demo steps that the client's journey check-ins replace (when check-ins are on).
+const REPLACED = new Set(['resign', 'checkin', 'call', 'day1kit', 'survey_d1', 'week1', 'pulse15', 'pulse30', 'pulse45', 'pulse60', 'pulse75', 'final90', 'm_1on1', 'm_goals', 'm_prob']);
+const TO_LABEL = { candidate: 'the candidate', manager: 'the manager', hr: 'HR', buddy: 'the buddy', email: 'an email address' };
+const CH_LABEL = { whatsapp: 'WhatsApp', email: 'email', both: 'WhatsApp and email' };
 const PHASE_OF = {
   offer: 'offer', docs: 'docs', forms: 'forms', confirm: 'forms',
   resign: 'pre', story: 'pre', checkin: 'pre', manager_intro: 'pre',
@@ -45,7 +50,7 @@ let readyTpl = [];
 
 const IND_ST = { done: ['✓ Done', 'ok'], sent: ['Waiting for candidate', 'info'], not_yet: ['Not yet, will ask again', 'warn'], rescheduled: ['Rescheduled', 'info'], escalated: ['Needs HR: not confirmed', 'bad'], help: ['Needs HR: candidate asked for help', 'bad'], retry: ['Quiz not passed yet', 'warn'], failed: ['Needs HR: quiz not passed', 'bad'], skipped: ['Skipped', ''] };
 
-let cands = [], selected = null, plan = [], steps = [], sel = null, msgs = [], lastSig = '', docs = [], docEdit = null, health = {}, preview = null, plans = {}, missingQ = null;
+let ckSetups = {}, cands = [], selected = null, plan = [], steps = [], sel = null, msgs = [], lastSig = '', docs = [], docEdit = null, health = {}, preview = null, plans = {}, missingQ = null;
 
 function fmtDate(iso) {
   if (!iso) return '';
@@ -60,7 +65,7 @@ function addDays(iso, n) { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '')
 let clockOff = 0;
 const nowMs = () => Date.now() + clockOff;
 const todayIso = () => { const d = new Date(nowMs()); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-const JUMPS = [[-28, 'D-28 Documents'], [-25, 'D-25 Resignation'], [-15, 'D-15 Owners'], [-7, 'D-7'], [-2, 'D-2'], [-1, 'D-1'], [0, 'Day 1'], [1, 'D+1'], [7, 'D+7'], [14, 'D+14'], [30, 'D+30'], [60, 'D+60'], [90, 'D+90']];
+const JUMPS = [[-28, 'D-28 Resignation'], [-21, 'D-21 Relieving date'], [-15, 'D-15 Owners'], [-7, 'D-7'], [-3, 'D-3 Joining details'], [-2, 'D-2'], [-1, 'D-1'], [0, 'Day 1'], [1, 'D+1 Infra'], [7, 'D+7'], [14, 'D+14 Fortnightly'], [30, 'D+30 Goals'], [45, 'D+45'], [60, 'D+60'], [89, 'D+89 Survey'], [90, 'D+90 Closing call'], [94, 'D+94 Closure']];
 
 function demoOn() { try { return localStorage.getItem(DEMO_KEY) === '1'; } catch { return false; } }
 function setDemo(on) { try { localStorage.setItem(DEMO_KEY, on ? '1' : '0'); } catch { /* storage unavailable */ } applyMode(); }
@@ -170,6 +175,10 @@ async function reload(want, stepId) {
 
 async function loadPlan(c) {
   const client = c && c.profile && c.profile.client;
+  if (client && ckSetups[client] === undefined) {
+    const r = await U().getJson('/api/checkins/setup', { method: 'POST', body: JSON.stringify({ client }) }).catch(() => ({ ok: false }));
+    ckSetups[client] = r.ok ? r.body : null;
+  }
   if (!client || plans[client] !== undefined) return;
   const r = await U().getJson(`/api/data/plans/${encodeURIComponent(client)}`).catch(() => ({ ok: false }));
   plans[client] = r.ok && r.body.data ? r.body.data : null;
@@ -266,6 +275,19 @@ function checkStatus(c, q) {
   return null;
 }
 
+function ckStatus(c, s) {
+  const a = ((c.checkins || {}).asks || {})[s.key];
+  if (!a) return null;
+  if (a.answer && a.flagged) return S('Needs HR: ' + a.answer, 'bad', false, true);
+  if (a.answer) return S('✓ ' + (s.o.item.answer === 'rating' ? 'Rated ' + a.answer + '/5' : a.answer), 'ok', true);
+  if (a.escalatedAt) return S('Needs HR: no answer', 'bad', false, true);
+  if (a.missingAt) return S('Needs HR: ' + (a.why || 'no recipient'), 'bad', false, true);
+  if (a.skipped) return S(a.why === 'not needed' ? 'Not needed' : 'Skipped (too late)', '', true);
+  if (a.sentAt && s.o.item.answer === 'none') return S('✓ Sent ' + fmtTime(a.sentAt), 'ok', true);
+  if (a.sentAt) return S((a.remindedAt ? 'Reminded, ' : 'Sent, ') + 'waiting for answer', 'info', false, false, true);
+  return null;
+}
+
 function buildSteps(c) {
   clockOff = +c.clockOffsetMs || 0;
   const out = [];
@@ -273,8 +295,11 @@ function buildSteps(c) {
   const sent = c.touchpoints || {};
   const p = plans[c.profile && c.profile.client];
   const indItems = p && Array.isArray(p.items) ? p.items : null;
+  const ck = ckSetups[c.profile && c.profile.client];
+  const ckOn = Boolean(ck && ck.setup && ck.setup.enabled !== false);
   for (const tp of plan) {
     if (tp.key === 'induct' && indItems && indItems.length) continue; // replaced by the client's real induction plan
+    if (ckOn && REPLACED.has(tp.key)) continue; // replaced by the client's journey check-ins
     const phase = PHASE_OF[tp.key] || (tp.date < doj ? 'pre' : 'p90');
     const kind = tp.key === 'docs' ? 'docs' : tp.key === 'confirm' ? 'forms' : tp.track !== 'c' ? 'owner' : 'tp';
     out.push({ id: 'tp:' + tp.key, key: tp.key, kind, phase, date: tp.date, rel: tp.rel, label: tp.label, track: tp.track, sentAt: sent[tp.key] && sent[tp.key].at });
@@ -282,6 +307,12 @@ function buildSteps(c) {
   for (const q of CHECKS) {
     if (!readyTpl.some(t => t.k === q.k)) continue;
     out.push({ id: 'rc:' + q.id, kind: 'rcheck', q, phase: q.phase, date: addDays(doj, q.day), rel: q.day < 0 ? 'D' + q.day : 'D-day', label: q.label, track: 'c', time: q.time });
+  }
+  if (ckOn) for (const o of ck.occ || []) {
+    const it = o.item;
+    const rel = o.day === 0 ? 'Day 1' : o.day < 0 ? 'D' + o.day : 'D+' + o.day;
+    out.push({ id: 'ck:' + o.key, kind: 'ck', key: o.key, o, phase: it.stage, date: addDays(doj, o.day), rel, time: it.time, track: it.to === 'candidate' ? 'c' : 'm',
+      label: it.title + (/@/.test(o.key) && !/\(D/.test(it.title) ? ` (${rel})` : '') });
   }
   for (const it of indItems || []) {
     out.push({ id: 'ind:' + it.id, kind: 'ind', item: it, phase: 'induct', date: addDays(doj, +it.day || 0), rel: 'Day ' + (+it.day || 0), label: it.title, track: 'c', time: it.time });
@@ -294,6 +325,7 @@ function buildSteps(c) {
     else if (s.kind === 'ind') st = indStatus(c, s.item);
     else if (s.kind === 'owner') st = ownerStatus(c, s);
     else if (s.kind === 'rcheck') st = checkStatus(c, s.q);
+    else if (s.kind === 'ck') st = ckStatus(c, s);
     if (!st && s.sentAt) st = S('✓ Sent ' + fmtTime(s.sentAt), 'ok', true);
     if (!st) st = s.date <= today ? S('Due now', 'warn') : S('Upcoming', '');
     s.status = st;
@@ -457,6 +489,7 @@ function renderStep() {
   if (s.kind === 'ind') return renderIndStep(box, c, s, when);
   if (s.kind === 'owner' && ownerTasks(s.key).length) return renderOwnerStep(box, c, s, when);
   if (s.kind === 'rcheck') return renderCheckStep(box, c, s, when);
+  if (s.kind === 'ck') return renderCkStep(box, c, s, when);
   return renderMsgStep(box, c, s, when);
 }
 
@@ -584,6 +617,56 @@ function renderCheckStep(box, c, s, when) {
   };
 }
 
+/* journey check-in step (configured in Client setup → Journey setup) */
+function ckFill(text, c) {
+  const ck = ckSetups[c.profile && c.profile.client] || {};
+  const j = (ck.setup && ck.setup.joining) || {};
+  const p = c.profile || {};
+  const map = j.mapUrl || (j.address ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(j.address) : '(link to follow)');
+  const v = { first: p.first || c.first || (c.name || '').split(' ')[0], name: c.name, doj: fmtDate(p.doj || c.doj), company: c.company || c.clientLabel || 'the company', role: p.role || c.role || '', manager: p.mgr || 'your manager',
+    reportTime: j.reportTime || 'the time shared by HR', address: j.address || 'the office address shared by HR', map, poc: j.poc || 'the HR team', pocPhone: j.pocPhone ? ` (${j.pocPhone})` : '', dress: j.dress || 'business casual', bring: j.bring || 'a photo ID',
+    hrEmail: ((ck.setup && ck.setup.contacts) || {}).hr || 'the HR team', pending: '(open induction items)', inductionDue: fmtDate(addDays(p.doj || c.doj, (ck.setup && ck.setup.inductionDays) || 21)) };
+  return String(text || '').replace(/\{(\w+)\}/g, (m, k) => (k in v ? v[k] : m));
+}
+
+function renderCkStep(box, c, s, when) {
+  const it = s.o.item, a = ((c.checkins || {}).asks || {})[s.key] || {};
+  const ck = ckSetups[c.profile && c.profile.client] || {};
+  const cont = Object.assign({}, (ck.setup && ck.setup.contacts) || {}, c.contacts || {});
+  const toCand = it.to === 'candidate';
+  const who = `To ${TO_LABEL[it.to] || it.to} by ${CH_LABEL[toCand ? it.channel : 'email']}${!toCand ? (it.to === 'email' ? ' (' + (it.email || 'not set') + ')' : ' (' + (it.to === 'hr' ? cont.hr || 'Client setup reply-to' : cont[it.to] || 'no email yet') + ')') : ''}`;
+  const ans = it.answer === 'buttons' ? `Answers: ${it.options.map(o => `<span class="chip ${it.flag.includes(o) ? 'bad' : 'teal'}">${esc(o)}</span>`).join(' ')}${it.flag.length ? ' <span class="note">(red = alerts HR)</span>' : ''}`
+    : it.answer === 'rating' ? 'Answer: a rating from 1 to 5 (1–2 alerts HR).' : it.answer === 'date' ? 'Answer: a date.' : it.answer === 'text' ? 'Answer: free text.' : 'Information only, no answer needed.';
+  const contactsBox = (it.to === 'manager' || it.to === 'buddy') ? `<div class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap"><input id="jlCkMgr" type="text" placeholder="Manager email for ${esc(c.name)}" value="${esc((c.contacts || {}).manager || '')}" style="flex:1;min-width:180px"><input id="jlCkBuddy" type="text" placeholder="Buddy email" value="${esc((c.contacts || {}).buddy || '')}" style="flex:1;min-width:150px"><button class="btn small" id="jlCkCont" type="button">Save for this candidate</button></div>` : '';
+  const rec = it.answer !== 'none' ? `<div class="row" style="margin-top:8px;gap:6px">${it.answer === 'buttons' ? `<select id="jlCkVal">${it.options.map(o => `<option>${esc(o)}</option>`).join('')}</select>` : `<input id="jlCkVal" type="${it.answer === 'date' ? 'date' : 'text'}" placeholder="${it.answer === 'rating' ? '1–5' : 'Answer'}" style="width:140px">`}<button class="btn small" id="jlCkRec" type="button">Record answer (e.g. given on a call)</button></div>` : '';
+  box.innerHTML = panel({
+    title: s.label, status: s.status, when: when + (it.every ? ` · repeats every ${it.every} days` : ''), who,
+    what: `<pre class="jl-mail" style="white-space:pre-wrap">${esc(ckFill(it.text, c))}</pre><p class="note" style="margin:6px 0 0">${ans}${it.remind ? ` Reminder after ${it.remind} h without an answer${it.escalate ? ', then HR is alerted' : ''}.` : ''} ${health.scheduler ? 'Goes automatically at this time.' : 'Automatic sending is not set up: use the button.'} Change it in Client setup → Journey setup.</p>${contactsBox}`,
+    actions: `<button class="btn primary" id="jlCkNow" type="button">${a.sentAt ? 'Send again now' : 'Send now'}</button>`,
+    result: (a.sentAt || a.answer || a.skipped || a.missingAt) ? `<p style="margin:0">${a.sentAt ? `Sent ${esc(fmtTime(a.sentAt))}${a.via ? ' by ' + esc(a.via.replace('+', ' and ')) : ''}` : ''}${a.emailError ? ' · <span class="jl-st-bad">' + esc(a.emailError) + '</span>' : ''}${a.remindedAt ? ' · reminded ' + esc(fmtTime(a.remindedAt)) : ''}${a.escalatedAt ? ' · HR alerted ' + esc(fmtTime(a.escalatedAt)) : ''}${a.answer ? `<br>Answer: <b>${esc(a.answer)}</b>${a.by ? ' (' + esc(a.by) + ')' : ''} ${esc(fmtTime(a.answeredAt))}${a.flagged ? ' · <span class="jl-st-bad">sent to HR</span>' : ''}` : ''}${a.skipped ? 'Skipped: ' + esc(a.why || '') : ''}${a.missingAt ? '<span class="jl-st-bad">Not sent: ' + esc(a.why || '') + '</span>' : ''}</p>${rec}` : rec
+  });
+  $('#jlCkNow').onclick = async () => {
+    $('#jlCkNow').disabled = true;
+    const r = await U().getJson('/api/checkins/send', { method: 'POST', body: JSON.stringify({ candidateId: c.id, key: s.key }) }).catch(() => ({ ok: false }));
+    if (r.ok && r.body.held) U().toast('WhatsApp window is closed: it goes out when the candidate next writes.');
+    else if (r.ok) U().toast(r.body.sent ? 'Sent.' : 'Nothing was sent: check the email settings.'); else U().toast(U().explain(r));
+    await reload(selected);
+  };
+  const rb = $('#jlCkRec');
+  if (rb) rb.onclick = async () => {
+    const v = $('#jlCkVal').value.trim(); if (!v) return;
+    const r = await U().getJson('/api/checkins/answer', { method: 'POST', body: JSON.stringify({ candidateId: c.id, key: s.key, value: v }) }).catch(() => ({ ok: false }));
+    U().toast(r.ok ? (r.body.flagged ? 'Recorded and flagged to HR.' : 'Recorded.') : U().explain(r));
+    await reload(selected);
+  };
+  const cb = $('#jlCkCont');
+  if (cb) cb.onclick = async () => {
+    const r = await U().getJson('/api/checkins/contacts', { method: 'POST', body: JSON.stringify({ candidateId: c.id, manager: $('#jlCkMgr').value, buddy: $('#jlCkBuddy').value }) }).catch(() => ({ ok: false }));
+    U().toast(r.ok ? 'Saved for ' + c.name + '.' : U().explain(r));
+    await reload(selected);
+  };
+}
+
 /* documents step */
 const DOC_TYPES = [
   { type: 'aadhaar', label: 'Aadhaar card', fields: [['name', 'Name'], ['dob', 'Date of birth'], ['gender', 'Gender'], ['aadhaarLast4', 'Aadhaar (last 4)'], ['address', 'Address']] },
@@ -700,6 +783,14 @@ function renderIndStep(box, c, s, when) {
   };
 }
 
+const PJ = { resignation: 'Resignation', exitAgreement: 'Exit agreed', relievingDate: 'Relieving date', noticePay: 'Notice pay', travel: 'Travel', roleClarity: 'Role clarity', goals: 'Goals', closingCall: 'Closing call' };
+function prejoinHtml(c) {
+  const pj = c.prejoin || {};
+  const rows = Object.entries(pj).map(([k, v]) => `<dt>${esc(PJ[k] || k)}</dt><dd>${esc(k === 'relievingDate' ? fmtDate(v.value) : v.value)}</dd>`).join('');
+  const ct = c.contacts || {};
+  return rows + (ct.manager ? `<dt>Manager email</dt><dd>${esc(ct.manager)}</dd>` : '') + (ct.buddy ? `<dt>Buddy email</dt><dd>${esc(ct.buddy)}</dd>` : '');
+}
+
 function renderFacts() {
   const c = current(), box = $('#jlFacts');
   if (!c) { box.innerHTML = ''; return; }
@@ -715,6 +806,7 @@ function renderFacts() {
     <dt>Annual CTC</dt><dd>${inr(p.ctc)}</dd>
     <dt>Manager</dt><dd>${esc(p.mgr || '—')}</dd>
     <dt>Offer letter</dt><dd>${c.letterSent ? 'Sent on WhatsApp' : 'Not sent yet'} <button class="btn small" id="jlLetter" type="button">Send again</button></dd>
+    ${prejoinHtml(c)}
     <dt>Risk signals</dt><dd>${risk}</dd>
     <dt>Handed to people</dt><dd>${ho}</dd></dl>`;
   $('#jlLetter').onclick = sendLetter;
@@ -849,7 +941,7 @@ async function summary(c, allDocs) {
   } finally { [plan, readyTpl, docs, steps] = keep; }
 }
 
-window.tcmplLive = { reload, summary, open(id, stepId) { const b = document.querySelector('nav.tabs button[data-tab="journey"]'); if (b) b.click(); setTimeout(() => reload(id, stepId), 50); } };
+window.tcmplLive = { forgetSetup(client) { delete ckSetups[client]; }, reload, summary, open(id, stepId) { const b = document.querySelector('nav.tabs button[data-tab="journey"]'); if (b) b.click(); setTimeout(() => reload(id, stepId), 50); } };
 
 (function waitForApp(n) {
   if (window.tcmplWAUtil && mount()) return;

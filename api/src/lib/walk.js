@@ -7,7 +7,7 @@ const run = require('./induction-run');
 const { getStore } = require('./store');
 
 const KEEP = ['phone', 'name', 'first', 'email', 'role', 'doj', 'client', 'clientLabel', 'company', 'agentName', 'profile', 'offerId',
-  'releasedAt', 'facts', 'faq', 'letterFile', 'letterProtected', 'hasLetter', 'letterMediaId', 'letterUploadedAt'];
+  'releasedAt', 'facts', 'faq', 'letterFile', 'letterProtected', 'hasLetter', 'letterMediaId', 'letterUploadedAt', 'contacts'];
 const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
 
 async function load(store, p) {

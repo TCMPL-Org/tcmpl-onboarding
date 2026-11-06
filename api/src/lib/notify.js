@@ -116,6 +116,16 @@ async function confirm(token) {
     if (p.a === 'ind-yes' && st.status !== 'done') { st.status = 'done'; st.doneAt = nowIso(); st.confirmedBy = 'owner'; }
     if (p.a === 'ind-no') cand.handovers = (cand.handovers || []).concat([{ why: `Induction: owner says "${p.t || p.k}" has not happened yet`, at: nowIso(), open: true }]);
     msg = p.a === 'ind-yes' ? 'Thank you, noted that it happened.' : 'Thank you. HR will follow up to set a new time.';
+  } else if (p.a === 'ck') {
+    const run = require('./induction-run');
+    const checkins = require('./checkins');
+    const setup = await run.setupFor(store, cand.profile && cand.profile.client);
+    const o = checkins.occurrences(setup).find(x => x.key === p.k);
+    if (!o) return page('This question is no longer part of the onboarding plan.', false);
+    const value = /^r[1-5]$/.test(String(p.v)) ? String(p.v).slice(1) : o.item.options[+p.v];
+    if (!value) return page('Unknown answer.', false);
+    const res = checkins.record(cand, setup, p.k, value, o.item.to === 'candidate' ? 'candidate (email)' : o.item.to + ' (email)');
+    msg = res.flagged ? `Thank you. Your answer "${value}" has been sent to HR, who will follow up.` : `Thank you, your answer "${value}" is recorded.`;
   } else return page('Unknown action.', false);
   await store.put('candidates', p.c, cand, SYSTEM);
   return page(msg, true);

@@ -181,6 +181,12 @@ async function notifyAction({ action, body, user }) {
 }
 
 // One-click links in emails (no sign-in; the link is signed).
+async function checkinAction({ action, body, user }) {
+  if (!user) return json(401, { error: 'sign_in_required' });
+  const r = await inductionRun.checkinAction(action, body || {}, user);
+  return json(r.status, r.body);
+}
+
 async function confirmLink({ token }) { return notify.confirm(token); }
 
 // Meta webhook: GET = subscription check, POST = incoming messages.
@@ -199,4 +205,4 @@ async function waWebhook(rawBody, signature) {
   return { status: 200, body: 'OK' };
 }
 
-module.exports = { health, data, ai, waStart, waSend, waPush, waVerify, waWebhook, docsRequest, docsReview, docsFile, formsAction, inductionAction, contentFile, cronTick, notifyAction, confirmLink };
+module.exports = { health, data, ai, waStart, waSend, waPush, waVerify, waWebhook, docsRequest, docsReview, docsFile, formsAction, inductionAction, contentFile, cronTick, notifyAction, confirmLink, checkinAction };

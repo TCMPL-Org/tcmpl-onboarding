@@ -13,6 +13,7 @@ const profile = require('./profile');
 const induction = require('./induction');
 const inductionRun = require('./induction-run');
 const readiness = require('./readiness');
+const checkins = require('./checkins');
 
 const SYSTEM = { name: 'onboarding-agent' };
 
@@ -139,8 +140,14 @@ async function handleInboundCore(m) {
   if (rec) {
     let d = await documents.onInbound(store, candidateId, cand, m);
     if (!d.handled) d = profile.onInbound(cand, m);
+    // Journey check-ins: whichever question was asked last gets the answer first.
+    const ckp = cand.checkins && cand.checkins.pending;
+    const ckFirst = ckp && [cand.readiness && cand.readiness.pending, cand.induction && cand.induction.pending].every(x => !x || !x.at || x.at <= ckp.at);
+    const ck = async () => checkins.onInbound(cand, await inductionRun.setupFor(store, cand.profile && cand.profile.client), m);
+    if (!d.handled && ckp && ckFirst) d = await ck();
     if (!d.handled && cand.readiness) d = readiness.onInbound(cand, m);
     if (!d.handled && cand.induction) d = induction.onInbound(cand, await inductionRun.planFor(store, cand.profile && cand.profile.client), m);
+    if (!d.handled && ckp && !ckFirst) d = await ck();
     if (d.handled) {
       await inductionRun.deliver(store, candidateId, cand, d.replies, SYSTEM, '', 'agent');
       const now = new Date().toISOString();

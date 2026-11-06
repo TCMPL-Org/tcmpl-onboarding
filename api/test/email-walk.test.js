@@ -80,3 +80,34 @@ test('walkthrough: jump to D-1 reminds the owner, D+1 escalates to HR; D-2 sends
   assert.equal(c.profile.doj, '2026-12-01');
   assert.equal(await store.get('messages', 'o-test'), null);
 });
+
+test('journey check-ins: saved setup, walkthrough jump runs resignation check, manager email answer by link', async () => {
+  const store = getStore();
+  const id = 'wa-917000000099';
+  await store.put('candidates', id, { phone: '917000000099', name: 'Asha Rao', email: 'asha@example.com', profile: { doj: '2026-12-01', client: 'ckclient', first: 'Asha' } }, user);
+  let r = await handlers.checkinAction({ action: 'setup', body: { client: 'ckclient' }, user });
+  assert.equal(r.status, 200);
+  const setup = r.jsonBody.setup;
+  setup.contacts.manager = 'Arjun <arjun@example.com>';
+  r = await handlers.checkinAction({ action: 'save', body: { client: 'ckclient', setup }, user });
+  assert.equal(r.status, 200);
+  r = await handlers.notifyAction({ action: 'jump', body: { candidateId: id, day: -28, time: '11:30' }, user });
+  assert.equal(r.status, 200);
+  sentWa.length = 0;
+  await handlers.notifyAction({ action: 'run', body: { candidateId: id }, user });
+  assert.ok(sentWa.some(t => /resignation/.test(t) && /Yes, submitted/.test(t)));
+  // HR sends the manager's fortnightly check-in now; the manager answers by the email link
+  sentMail.length = 0;
+  r = await handlers.checkinAction({ action: 'send', body: { candidateId: id, key: 'mgr-pulse@14' }, user });
+  assert.equal(r.status, 200);
+  assert.equal(sentMail[0].recipients.to[0].address, 'arjun@example.com');
+  const html = sentMail[0].content.html;
+  const href = /href="([^"]*a?confirm\?t=[^"]+)"[^>]*>Some concerns/.exec(html);
+  assert.ok(href, 'answer button in email');
+  const t = new URL(href[1].replace(/&amp;/g, '&')).searchParams.get('t');
+  const page = await handlers.confirmLink({ token: t });
+  assert.match(page.body, /sent to HR/);
+  const c = (await store.get('candidates', id)).data;
+  assert.equal(c.checkins.asks['mgr-pulse@14'].answer, 'Some concerns');
+  assert.ok(c.handovers.some(h => /Fortnightly check-in \(manager\)/.test(h.why)));
+});
