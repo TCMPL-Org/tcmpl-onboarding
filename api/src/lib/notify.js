@@ -77,11 +77,11 @@ async function candidateEmail(p, user) {
 }
 
 // Automatic emails from the scheduler (reminders, escalations, "did it happen?" to owners).
-async function auto(store, candidateId, cand, { to, cc, subject, text, buttons, kind, k }) {
+async function auto(store, candidateId, cand, { to, cc, subject, text, buttons, kind, k, replyTo }) {
   if (!email.emailConfigured()) return false;
   const st = await settings(store, cand.profile && cand.profile.client);
   try {
-    const r = await email.send({ to, cc: [].concat(email.addresses(cc), email.addresses(st.cc)), subject, text, buttons, replyTo: st.replyTo });
+    const r = await email.send({ to, cc: [].concat(email.addresses(cc), email.addresses(st.cc)), subject, text, buttons, replyTo: (replyTo && email.addresses(replyTo).length) ? replyTo : st.replyTo });
     logEmail(cand, { kind, k, to: r.to, cc: r.cc, subject, by: 'onboarding-agent' });
     return true;
   } catch (e) { console.error('auto email failed', e && e.message); return false; }

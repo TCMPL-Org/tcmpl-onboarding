@@ -312,7 +312,7 @@ async function checkinAction(action, p, user) {
   if (action === 'setup' || action === 'save') {
     const client = str(p && p.client, 60).replace(/[^\w-]/g, '');
     if (!client) return { status: 400, body: { error: 'client_required' } };
-    if (action === 'setup') { const setup = await setupFor(store, client); return { status: 200, body: { setup, defaults: checkins.defaults(), occ: checkins.occurrences(setup).map(o => ({ key: o.key, day: o.day, item: o.item })) } }; }
+    if (action === 'setup') { const setup = await setupFor(store, client); return { status: 200, body: { setup, sender: process.env.ACS_SENDER || '', defaults: checkins.defaults(), occ: checkins.occurrences(setup).map(o => ({ key: o.key, day: o.day, item: o.item })) } }; }
     const rec = await store.get('journeys', client);
     const setup = checkins.cleanSetup(p.setup);
     const data = Object.assign({}, rec && rec.data, { client, checkins: setup, updated: new Date().toISOString() });

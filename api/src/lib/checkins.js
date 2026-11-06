@@ -28,7 +28,7 @@ const slug = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').repl
 
 // ---------------------------------------------------------------- TCMPL default
 const DEFAULT_INFRA = ['Workstation / seat', 'Canteen coupons', 'Parking pass'];
-const I = (o) => Object.assign({ to: 'candidate', channel: 'whatsapp', time: '11:00', every: 0, until: null, answer: 'buttons', options: [], flag: [], remind: 24, escalate: true, saveAs: '', stopOn: [], when: '', off: false }, o);
+const I = (o) => Object.assign({ to: 'candidate', email: '', cc: '', replyTo: '', channel: 'whatsapp', time: '11:00', every: 0, until: null, answer: 'buttons', options: [], flag: [], remind: 24, escalate: true, saveAs: '', stopOn: [], when: '', off: false }, o);
 const DEFAULT_ITEMS = [
   I({ id: 'resign', stage: 'pre', title: 'Resignation status', day: -28, every: 7, until: -7, stopOn: ['Yes, submitted'], saveAs: 'resignation',
     text: 'Hi {first}, a quick check: have you submitted your resignation at your current company?', options: ['Yes, submitted', 'Not yet', 'Need help'], flag: ['Need help'] }),
@@ -93,7 +93,7 @@ function cleanItem(x) {
   return {
     id: str(x.id, 40).replace(/[^\w-]/g, '') || slug(x.title) + '-' + Math.random().toString(36).slice(2, 6),
     stage: pick(x.stage, STAGES, 'p90'), title: str(x.title, 120) || 'Check-in',
-    to: pick(x.to, TO, 'candidate'), email: str(x.email, 300), channel: pick(x.channel, CHANNELS, 'whatsapp'),
+    to: pick(x.to, TO, 'candidate'), email: str(x.email, 300), cc: str(x.cc, 500), replyTo: str(x.replyTo, 300), channel: pick(x.channel, CHANNELS, 'whatsapp'),
     day: num(x.day, -90, 365, 0), time: /^\d{1,2}:\d{2}$/.test(x.time || '') ? x.time : '11:00',
     every: num(x.every, 0, 90, 0), until: x.until === null || x.until === '' || x.until === undefined ? null : num(x.until, -90, 365, null),
     text: str(x.text, 1500), answer: pick(x.answer, ANSWERS, 'buttons'), options: opts,
@@ -206,7 +206,7 @@ function build(o, cand, setup, ctx, { reminder = false } = {}) {
         : it.answer === 'rating' ? [1, 2, 3, 4, 5].map(n => ({ label: String(n), url: linkFor({ c: ctx.candidateId, k: o.key, a: 'ck', v: 'r' + n }), secondary: true })).filter(b => b.url) : [];
       const about = it.to === 'candidate' ? '' : `About: ${cand.name || ''}${cand.clientLabel ? ' · ' + cand.clientLabel : ''}${(cand.profile && cand.profile.doj) ? ' · joining ' + fmtDoj(cand.profile.doj) : ''}\n\n`;
       const tail = it.answer === 'date' || it.answer === 'text' ? '\n\nPlease reply to this email with your answer.' : '';
-      out.email = { to, subject: `${prefix}${it.title}${it.to === 'candidate' ? '' : ' · ' + (cand.name || '')}`, text: about + body.replace(/\*/g, '') + tail, buttons };
+      out.email = { to, cc: it.cc || '', replyTo: it.replyTo || '', subject: `${prefix}${it.title}${it.to === 'candidate' ? '' : ' · ' + (cand.name || '')}`, text: about + body.replace(/\*/g, '') + tail, buttons };
     } else out.emailMissing = it.to;
   }
   return out;

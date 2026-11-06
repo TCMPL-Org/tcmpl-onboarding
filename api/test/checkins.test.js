@@ -72,6 +72,10 @@ test('manager fortnightly check-in is an email with one-click answers; reminder 
   let out = ck.due(c, s, t(14, 10, 5), { link, candidateId: 'wa-1', waBusy: true });
   const m = out.find(x => x.key === 'mgr-pulse@14');
   assert.equal(m.email.to, 'Arjun <arjun@example.com>');
+  const s2 = ck.cleanSetup(Object.assign({}, s, { items: s.items.map(x => (x.id === 'mgr-pulse' ? Object.assign({}, x, { cc: 'hrbp@example.com', replyTo: 'jeet@example.com' }) : x)) }));
+  const m2 = ck.sendNow(cand(), s2, 'mgr-pulse@28', { link, candidateId: 'wa-1' });
+  assert.equal(m2.email.cc, 'hrbp@example.com');
+  assert.equal(m2.email.replyTo, 'jeet@example.com');
   assert.deepEqual(m.email.buttons.map(b => b.label), ['Settling in well', 'Some concerns', 'Serious concerns']);
   assert.ok(!m.wa);
   assert.ok(!out.some(x => x.key === 'pulse@14'), 'candidate WhatsApp waits while another question is open');

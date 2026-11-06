@@ -30,6 +30,7 @@ function mount() {
   box.style.marginBottom = '16px';
   box.innerHTML = `<h3 style="margin:0 0 4px">Journey setup · check-ins, surveys and closure · <span id="ckClient"></span></h3>
     <p class="note" style="margin:0 0 10px">What the agent asks or tells the candidate, manager, HR and buddy, and when. Each row has its own channel (WhatsApp, Email or both). No calendar invites: meetings and calls get reminders and a "did it happen?" check. Everything is sent and tracked from <b>Candidate journey</b>.</p>
+    <p class="note" id="ckFrom" style="margin:0 0 10px"></p>
     <div id="ckBody"><p class="note">Loading…</p></div>
     <div class="row" style="margin-top:10px"><button class="btn small primary" id="ckSave" type="button">Save journey setup</button><button class="btn small" id="ckAdd" type="button">+ Add check-in</button><button class="btn small" id="ckReset" type="button">Reset to TCMPL default</button><span class="note" id="ckState"></span></div>`;
   const after = $('#slive') || sec.querySelector('.intro');
@@ -52,6 +53,8 @@ async function load() {
   const r = await u.getJson('/api/checkins/setup', { method: 'POST', body: JSON.stringify({ client }) }).catch(() => ({ ok: false }));
   if (!r.ok) { $('#ckBody').innerHTML = '<p class="note">Journey setup needs the database (sign in, and check /api/health).</p>'; return; }
   setup = r.body.setup; defaults = r.body.defaults; dirty = false;
+  const h = await u.loadHealth();
+  $('#ckFrom').innerHTML = `<b>From:</b> ${esc(r.body.sender || 'the Azure sender address')} (fixed by Azure until your own domain is connected) · <b>To</b>, <b>CC</b> and <b>Reply-to</b> are set per row below${h && h.email ? '' : ' · <i>email is not connected</i>'}.`;
   // Joining details default to what Client setup already holds for this client.
   const f = window.tcmplClientFacts ? window.tcmplClientFacts() : {};
   for (const k of ['address', 'reportTime', 'poc', 'dress', 'bring', 'mapUrl']) if (!setup.joining[k] && f[k]) setup.joining[k] = f[k];
@@ -70,6 +73,8 @@ function itemHtml(it, i) {
       <label>…until day<input data-f="until" type="number" value="${it.until == null ? '' : esc(it.until)}"></label>
       <label>To<select data-f="to">${opt(TO, it.to)}</select></label>
       <label>Other email (when To = Other email)<input data-f="email" value="${esc(it.email || '')}"></label>
+      <label>CC (emails, comma)<input data-f="cc" value="${esc(it.cc || '')}" placeholder="clienthr@company.com, recruiter@company.com"></label>
+      <label>Reply-to for this email (empty = client default)<input data-f="replyTo" value="${esc(it.replyTo || '')}" placeholder="hr@company.com"></label>
       <label>Channel<select data-f="channel">${opt(CH, it.channel)}</select></label>
       <label>Answer<select data-f="answer">${opt(ANS, it.answer)}</select></label>
       <label>Answer options (comma, max 20 letters each)<input data-f="options" value="${esc(csv(it.options))}"></label>
@@ -127,7 +132,7 @@ function collect() {
     const v = f => d.querySelector(`[data-f="${f}"]`);
     it._open = d.open;
     it.off = !v('on').checked;
-    for (const f of ['title', 'stage', 'time', 'to', 'email', 'channel', 'answer', 'text', 'when']) it[f] = v(f).value;
+    for (const f of ['title', 'stage', 'time', 'to', 'email', 'cc', 'replyTo', 'channel', 'answer', 'text', 'when']) it[f] = v(f).value;
     it.day = +v('day').value || 0; it.every = +v('every').value || 0;
     it.until = v('until').value === '' ? null : +v('until').value;
     it.options = fromCsv(v('options').value); it.flag = fromCsv(v('flag').value); it.stopOn = fromCsv(v('stopOn').value);
