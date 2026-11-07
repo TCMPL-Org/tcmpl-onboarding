@@ -1,0 +1,45 @@
+/* Exit module styles. Every class starts with ex- so nothing in Onboarding changes. */
+.ex-tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);margin-bottom:16px;scrollbar-width:thin}
+.ex-tabs button{background:none;border:0;border-bottom:3px solid transparent;padding:10px 12px;color:var(--muted);font-weight:600;white-space:nowrap;cursor:pointer}
+.ex-tabs button[aria-selected=true]{color:var(--teal-ink);border-bottom-color:var(--teal)}
+.ex-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:900px){.ex-grid{grid-template-columns:1fr}}
+.ex-form{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px}
+.ex-form label{display:flex;flex-direction:column;gap:4px;font-size:.85rem;font-weight:600;color:var(--muted)}
+.ex-form input,.ex-form select{width:100%}
+.ex-form .ex-wide{grid-column:span 2}
+.ex-dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;margin:0}
+.ex-dl dt{color:var(--muted);font-weight:600}
+.ex-dl dd{margin:0}
+.ex-err{color:#b42318;margin:0;padding-left:18px}
+.ex-tbl{width:100%;border-collapse:collapse;font-size:.9rem}
+.ex-tbl th,.ex-tbl td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+.ex-tbl th{color:var(--muted);font-weight:600;white-space:nowrap}
+.ex-click{cursor:pointer}
+.ex-click:hover{background:var(--chip)}
+.ex-edit input[type=text],.ex-edit select,.ex-edit textarea{width:100%;min-width:90px}
+.ex-edit textarea{min-width:260px;font:inherit}
+.ex-edit input.w5{min-width:64px}.ex-edit input.w10{min-width:130px}.ex-edit input.w12{min-width:170px}.ex-edit input.w14{min-width:190px}.ex-edit input.w16{min-width:220px}.ex-edit input.w20{min-width:260px}
+.ex-edit select{min-width:120px}
+.ex-num{width:80px}
+.ex-det{margin-top:12px}
+.ex-det summary{font-weight:700;cursor:pointer;font-size:1.02rem}
+.ex-det h4{margin:14px 0 6px}
+.chip.ex-red{background:#fde8e7;color:#b42318}
+.chip.ex-amber{background:#fff4dc;color:#8a5a00}
+.ex-redcard{border-color:#f3b5b0;background:#fff8f7;margin-bottom:16px}
+.ex-stage h4{margin:14px 0 6px;color:var(--teal-ink)}
+.ex-step{display:grid;grid-template-columns:96px 1fr auto;gap:10px;align-items:start;padding:8px 0;border-bottom:1px dashed var(--line)}
+.ex-when{font-weight:600;font-size:.85rem}
+.ex-when span{display:block;color:var(--muted);font-weight:400}
+.ex-step.ex-due .chip{background:#fff4dc;color:#8a5a00}
+.ex-step.ex-done .chip{background:#e3f4ea;color:#17663a}
+.ex-today{margin:8px 0;padding:4px 8px;border-left:3px solid var(--teal);color:var(--teal-ink);font-weight:700;font-size:.85rem}
+.ex-msgs{display:flex;flex-direction:column;gap:6px;max-height:360px;overflow-y:auto}
+.ex-msg{max-width:85%;padding:8px 10px;border-radius:10px;font-size:.9rem;white-space:pre-wrap}
+.ex-msg span{display:block;font-size:.72rem;color:var(--muted);margin-top:2px}
+.ex-msg.ex-in{align-self:flex-start;background:var(--chip)}
+.ex-msg.ex-out{align-self:flex-end;background:#dcf2e6}
+.ex-log{padding:6px 0;border-bottom:1px dashed var(--line);font-size:.9rem}
+.ex-later ul{margin:6px 0 10px;padding-left:18px}
+#exitApp input[type=email],#exitApp input[type=datetime-local]{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:7px 10px;min-width:0}

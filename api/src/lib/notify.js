@@ -137,6 +137,10 @@ function hrAddress(st) { return email.addresses(st.replyTo)[0] || ''; }
 async function confirm(token) {
   const p = links.verify(token);
   if (!p) return page('This link has expired or is not valid.', false);
+  if (p.m && p.m !== 'onboarding') {
+    const r = await require('./modules').confirm(p.m, p);
+    return r || page('This link is not active.', false);
+  }
   const store = getStore();
   if (!store) return page('The onboarding system is not available right now. Please try again later.', false);
   const rec = await store.get('candidates', p.c);

@@ -15,6 +15,7 @@ const inductionRun = require('./induction-run');
 const readiness = require('./readiness');
 const checkins = require('./checkins');
 const notify = require('./notify');
+const modules = require('./modules');
 
 const SYSTEM = { name: 'onboarding-agent' };
 
@@ -404,6 +405,9 @@ async function withLatestFacts(store, cand) {
 }
 
 async function handleInbound(m) {
+  // Other modules (Exit) first: one claims the message when it belongs to it (e.g. an open exit case).
+  const s0 = getStore();
+  if (s0 && m && m.from && await modules.route(m, s0)) return;
   await handleInboundCore(m);
   const store = getStore();
   // New red items from this message (decline, "Need help", low rating, …) → email HR now.

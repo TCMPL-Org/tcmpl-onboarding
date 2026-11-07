@@ -13,6 +13,7 @@ const { emailConfigured } = require('./email');
 const documents = require('./documents');
 const { docintelConfigured } = require('./docintel');
 const { storageConfigured } = require('./blob');
+const modules = require('./modules');
 
 const MAX_DOC_BYTES = 1800000; // Cosmos DB items are limited to 2 MB
 
@@ -20,7 +21,7 @@ const json = (status, body) => ({ status, jsonBody: body });
 
 function health() {
   const store = getStore();
-  return json(200, { ok: true, db: Boolean(store), store: store ? store.kind : null, ai: aiConfigured(), whatsapp: wa.waConfigured(), webhook: wa.webhookConfigured(), ocr: docintelConfigured(), storage: storageConfigured(), scheduler: Boolean(process.env.CRON_SECRET), email: emailConfigured() });
+  return json(200, { ok: true, db: Boolean(store), store: store ? store.kind : null, ai: aiConfigured(), whatsapp: wa.waConfigured(), webhook: wa.webhookConfigured(), ocr: docintelConfigured(), storage: storageConfigured(), scheduler: Boolean(process.env.CRON_SECRET), email: emailConfigured(), exit: modules.loaded('exit') });
 }
 
 async function data({ method, col, id, body, user }) {
@@ -29,6 +30,8 @@ async function data({ method, col, id, body, user }) {
   if (id !== undefined && id !== null && id !== '' && !validId(id)) return json(400, { error: 'bad_id' });
   if (col === 'letters') return json(403, { error: 'not_available' });
   if ((col === 'messages' || col === 'documents' || col === 'content') && method !== 'GET') return json(403, { error: 'read_only' });
+  // Module switches and Exit records change only through their own routes (/api/modules, /api/exit).
+  if ((col === 'modules' || col.startsWith('exit_')) && method !== 'GET') return json(403, { error: 'read_only' });
   if (col === 'facts' && method === 'PUT' && body) body = { facts: String(body.facts || '').slice(0, 12000), faq: String(body.faq || '').slice(0, 6000), updated: new Date().toISOString() };
   const store = getStore();
   if (!store) return json(503, { error: 'database_not_configured' });
@@ -168,7 +171,11 @@ async function cronTick({ key }) {
   const want = process.env.CRON_SECRET || '';
   const a = Buffer.from(String(key || '')), b = Buffer.from(want);
   if (!want || a.length !== b.length || !require('node:crypto').timingSafeEqual(a, b)) return json(401, { error: 'bad_key' });
-  return json(200, await inductionRun.tick());
+  const out = await inductionRun.tick();
+  // Other modules (Exit) run their own due steps; their errors are caught inside runTicks.
+  const store = getStore();
+  if (store) out.modules = await modules.runTicks(store);
+  return json(200, out);
 }
 
 // Email: owner tasks, candidate emails, client email settings. Walkthrough: jump / run / realtime / reset.
