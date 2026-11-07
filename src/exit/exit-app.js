@@ -15,7 +15,6 @@ const TABS = [
 ];
 const LATER = {
   approvals: ['Every approval request across cases, worked out from level, department, separation type and amount.', 'Approvers answer by one-click email links; reminders after the SLA, then the delegate is asked.', 'A "Who approves?" tester for any combination.'],
-  clear: ['Clearance board per case: owners confirm by one-click email links, provisionally from acceptance.', 'Employee declares assets with photos on WhatsApp; the last day is only a confirmation.', 'Full and final settlement worked out from the rules, letters as PDF, wages within the legal deadline.'],
   interviews: ['Exit interview on WhatsApp in the employee\'s language.', 'Anonymous reports: groups smaller than the threshold in Exit setup are hidden.', 'Alumni opt-in on the last day (consent recorded) and job sharing.'],
   dashboard: ['Open cases, exits per month, attrition by department and manager hotspots.', 'Everything read from this client\'s exit cases only.'],
   attrition: ['Cost of attrition, early warning, cohorts and tenure, regretted loss.', 'Any sample data is clearly marked.']
@@ -84,6 +83,7 @@ function show(k) {
   $$('.ex-sec').forEach(s => { s.hidden = s.id !== 'ex-' + k; });
   if (k === 'desk') renderDesk();
   if (k === 'journey') renderJourney();
+  if (k === 'clear') renderClear();
   if (k === 'setup') renderSetup();
 }
 
@@ -367,6 +367,101 @@ function drawCase(data) {
   };
 }
 
+/* ---------------- 4 · Clearances and F&F ---------------- */
+const inr = n => (n < 0 ? '−' : '') + '₹' + Math.round(Math.abs(Number(n) || 0)).toLocaleString('en-IN');
+const FNF_FIELDS = [['gross', 'Monthly gross (₹)'], ['basic', 'Monthly basic (₹)'], ['leaveDays', 'Leave balance (days)'], ['loans', 'Loans and advances (₹)'], ['other', 'Other recoveries (₹)'], ['otherNote', 'Other recoveries: what', 'text'], ['extra', 'Other earnings (₹)'], ['extraNote', 'Other earnings: what', 'text'], ['pt', 'Professional tax (₹)'], ['tds', 'Income tax / TDS (₹)']];
+
+async function renderClear() {
+  const sec = $('#ex-clear');
+  const open = cases.filter(k => k.status === 'open');
+  if (!curId || !cases.some(k => k.id === curId)) curId = (open[0] || cases[0] || {}).id || '';
+  sec.innerHTML = `<div class="intro"><div><h2>Clearances and F&F</h2><p>No-dues start at acceptance, not on the last day. Owners confirm with one click in their email, or HR sets the status here. The F&F is worked out from the pay figures below and the client's rules, approved by payroll by email, and paid within the legal deadline.</p></div>
+    <div class="row"><select id="exPick2">${cases.map(k => `<option value="${esc(k.id)}" ${k.id === curId ? 'selected' : ''}>${esc(k.name)} · ${esc(k.typeName)} · ${fmtD(k.lwd)}${k.status !== 'open' ? ' (' + k.status + ')' : ''}</option>`).join('')}</select></div></div>
+    <div id="exClr">${curId ? '<div class="note">Loading…</div>' : '<div class="card note">No cases yet. Raise one on the Exit desk.</div>'}</div>`;
+  if ($('#exPick2')) $('#exPick2').onchange = () => { curId = $('#exPick2').value; renderClear(); };
+  if (!curId) return;
+  const r = await post('case', { id: curId });
+  if (!r.ok) { $('#exClr').innerHTML = '<div class="card">This case could not be loaded.</div>'; return; }
+  drawClear(r.body);
+}
+
+function drawClear(data) {
+  const k = data.case, c = data.fnf, isOpen = k.status === 'open';
+  const owners = (setupRec && setupRec.setup.owners) || [];
+  const clr = k.clearances || {};
+  const inp = (k.fnf && k.fnf.inputs) || {};
+  const st = (k.fnf && k.fnf.status) || 'Not started';
+  const sentLetters = k.letters || {};
+  const statusChip = s => `<span class="chip${s === 'cleared' ? ' ex-green' : s === 'issue' ? ' ex-red' : ''}">${s === 'cleared' ? 'cleared' : s === 'issue' ? 'pending item' : 'open'}</span>`;
+  const table = c ? `<table class="ex-tbl ex-fnf"><tr><th>Item</th><th class="ex-r">Amount</th></tr>
+      ${c.earn.map(([l, v]) => `<tr><td>${esc(l)}</td><td class="ex-r">${inr(v)}</td></tr>`).join('')}
+      <tr class="ex-b"><td>Total earnings</td><td class="ex-r">${inr(c.earnTotal)}</td></tr>
+      ${c.ded.map(([l, v]) => `<tr><td>Less: ${esc(l)}</td><td class="ex-r">−${inr(v)}</td></tr>`).join('')}
+      <tr class="ex-b"><td>Wages part (net)${c.wagesNet < 0 ? ' <span class="note">employee to pay the company</span>' : ''}</td><td class="ex-r">${inr(c.wagesNet)}</td></tr>
+      ${c.gratuity ? `<tr><td>Gratuity (${c.yrs} years)</td><td class="ex-r">${inr(c.gratuity)}</td></tr>` : `<tr><td class="note" colspan="2">No gratuity: ${c.yrsExact} years of service${c.gratElig ? '' : ' (below the minimum in Exit setup)'}.</td></tr>`}
+      <tr class="ex-b"><td>Net payable</td><td class="ex-r">${inr(c.net)}</td></tr></table>
+      <p class="note">Wages part by <b>${fmtD(c.wageDue)}</b>${c.gratuity ? `, gratuity by <b>${fmtD(c.gratDue)}</b>` : ''}.${c.shortfall ? ` Notice: ${c.shortfall} days short, recovered.` : ''} Figures are indicative until payroll approves.</p>` : '<p class="note">The F&F needs a last working day.</p>';
+  $('#exClr').innerHTML = `<div class="ex-grid">
+    <div>
+      <div class="card"><h3>Clearance board</h3>
+        <table class="ex-tbl"><tr><th>Area</th><th>What they clear</th><th>Status</th><th></th></tr>
+        ${owners.map(o => { const x = clr[o.id] || {}; return `<tr><td><b>${esc(o.area)}</b><div class="note">${esc(o.contact || o.owner || '')}</div></td><td class="note">${esc(o.items)}</td>
+          <td>${statusChip(x.status)}<div class="note">${x.at ? fmtDT(x.at) + (x.by ? ' · ' + esc(x.by) : '') : x.askedAt ? 'asked ' + fmtDT(x.askedAt) : 'not asked yet'}</div></td>
+          <td>${isOpen ? `<div class="ex-stepbtns">${x.status !== 'cleared' ? `<button class="btn small" type="button" data-clr="${esc(o.id)}" data-v="cleared">Cleared</button>` : ''}${x.status !== 'issue' ? `<button class="btn small" type="button" data-clr="${esc(o.id)}" data-v="issue">Pending item</button>` : ''}${x.status ? `<button class="btn small" type="button" data-clr="${esc(o.id)}" data-v="open">Reopen</button>` : ''}</div>` : ''}</td></tr>`; }).join('')}</table>
+        <p class="note">Owners get their email with the steps "Start clearances" and "Reminder to owners" in Case journey. Relieving and experience letters wait until every area is cleared.</p></div>
+      <div class="card" style="margin-top:16px"><h3>Letters</h3>
+        ${(data.letters || []).length ? `<table class="ex-tbl">${data.letters.map(n => `<tr><td><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-lt="${esc(n)}"> ${esc(n)}</label></td><td class="note">${sentLetters[n] ? 'sent ' + fmtDT(sentLetters[n].sentAt) : 'not sent'}</td><td><button class="btn small" type="button" data-dl="${esc(n)}">Download PDF</button></td></tr>`).join('')}</table>
+        ${isOpen ? '<div class="row" style="margin-top:8px"><button class="btn small primary" type="button" id="exSendLetters">Send ticked letters to the employee</button><span class="note">by email and WhatsApp</span></div>' : ''}` : '<p class="note">No letters are set for this separation type (Exit setup → Separation types).</p>'}</div>
+    </div>
+    <div>
+      <div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Full and final settlement</h3><span class="chip${/paid|Approved|Closed/.test(st) ? ' ex-green' : st === 'Needs correction' ? ' ex-red' : st === 'Sent for approval' ? ' ex-amber' : ''}">${esc(st)}</span></div>
+        <div class="ex-form" style="margin-top:10px">${FNF_FIELDS.map(([f, l, t]) => `<label>${esc(l)}<input type="${t === 'text' ? 'text' : 'number'}" data-ff="${f}" value="${esc(inp[f] == null || inp[f] === 0 ? '' : inp[f])}" ${isOpen ? '' : 'disabled'}></label>`).join('')}
+          ${k.typeId === 'misconduct' ? `<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-ff="gratForfeit" ${inp.gratForfeit ? 'checked' : ''}> Gratuity forfeited (misconduct, as per law)</label>` : ''}</div>
+        ${isOpen ? '<div class="row" style="margin:10px 0"><button class="btn small" type="button" id="exFnfSave">Save and calculate</button></div>' : ''}
+        ${c && c.missing.length ? `<p class="ex-err">Still needed: ${esc(c.missing.join(', '))}.</p>` : table}
+        ${isOpen && c && !c.missing.length ? `<div class="ex-stepbtns"><button class="btn small primary" type="button" id="exFnfSend">Send to payroll for approval</button>
+          ${st !== 'Approved' && !/paid/.test(st) ? '<button class="btn small" type="button" data-fs="Approved">Mark approved</button>' : ''}
+          ${!/paid/.test(st) ? '<button class="btn small" type="button" data-fs="Wages paid">Wages paid</button>' : ''}
+          ${c.gratuity && st !== 'Gratuity paid' ? '<button class="btn small" type="button" data-fs="Gratuity paid">Gratuity paid</button>' : ''}
+          <button class="btn small" type="button" data-dl="F&F statement">Download statement</button>
+          ${/paid/.test(st) ? '<button class="btn small" type="button" data-fs="Closed">Close the case</button>' : ''}</div>` : ''}
+        <p class="note">Payroll: ${esc((setupRec && setupRec.setup.contacts.payroll) || 'not set (Exit setup → Company and contacts)')}.</p></div>
+    </div></div>`;
+
+  const reload = async (x, okText) => {
+    if (!x.ok) { toast(x.body.error === 'exit_off_for_client' ? 'Exit is off for this client.' : 'Not done.'); return; }
+    if (okText) toast(okText);
+    await loadCases();
+    const y = await post('case', { id: k.id });
+    if (y.ok) drawClear(y.body);
+  };
+  $$('#exClr [data-clr]').forEach(b => { b.onclick = async () => { b.disabled = true; await reload(await post('clearance', { id: k.id, owner: b.dataset.clr, status: b.dataset.v })); }; });
+  $$('#exClr [data-fs]').forEach(b => { b.onclick = async () => {
+    if (b.dataset.fs === 'Closed' && !window.confirm('Close this case? Nothing more is sent for it.')) return;
+    b.disabled = true; await reload(await post('fnf-status', { id: k.id, status: b.dataset.fs }), `F&F: ${b.dataset.fs.toLowerCase()}.`);
+  }; });
+  $$('#exClr [data-dl]').forEach(b => { b.onclick = async () => {
+    const x = await post('letter', { id: k.id, name: b.dataset.dl });
+    if (!x.ok) { toast('Not ready yet.'); return; }
+    const bin = atob(x.body.base64), bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' })); a.download = x.body.name; document.body.append(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  }; });
+  if ($('#exFnfSave')) $('#exFnfSave').onclick = async () => {
+    const inputs = {};
+    $$('#exClr [data-ff]').forEach(i => { inputs[i.dataset.ff] = i.type === 'checkbox' ? i.checked : i.type === 'number' ? Number(i.value || 0) : i.value; });
+    await reload(await post('fnf', { id: k.id, inputs }), 'F&F saved and calculated.');
+  };
+  if ($('#exFnfSend')) $('#exFnfSend').onclick = async () => { const x = await post('send', { id: k.id, key: 'fnf-draft' }); await reload(x, x.ok ? (x.body.result.status === 'sent' ? 'Sent to payroll with the statement attached.' : 'Not sent: ' + (x.body.result.notes || []).join(' · ')) : ''); };
+  if ($('#exSendLetters')) $('#exSendLetters').onclick = async () => {
+    const names = $$('#exClr [data-lt]').filter(i => i.checked).map(i => i.dataset.lt);
+    if (!names.length) { toast('Tick the letters to send.'); return; }
+    const x = await post('letters-send', { id: k.id, names });
+    await reload(x, x.ok ? (x.body.result.ok ? 'Letters sent: ' : 'Not sent: ') + (x.body.result.notes || []).join(' · ') : '');
+  };
+}
+
 /* ---------------- 8 · Exit setup ---------------- */
 let draftSetup = null;
 const COLS = o => ({
@@ -424,6 +519,10 @@ function renderSetup() {
       <label>Wages paid within (working days)<input type="number" data-g="fnf.wageDays" value="${esc(s.fnf.wageDays)}" class="ex-num"></label>
       <label>Gratuity after (years)<input type="number" data-g="fnf.gratYears" value="${esc(s.fnf.gratYears)}" class="ex-num"></label>
       <label>Gratuity paid within (days)<input type="number" data-g="fnf.gratDays" value="${esc(s.fnf.gratDays)}" class="ex-num"></label>
+      <label>Gratuity after, fixed term (years)<input type="number" data-g="fnf.fteGratYears" value="${esc(s.fnf.fteGratYears)}" class="ex-num"></label>
+      <label>Gratuity cap (₹)<input type="number" data-g="fnf.gratCap" value="${esc(s.fnf.gratCap)}"></label>
+      <label>Leave encashment rate<select data-g="fnf.encash"><option value="basic26" ${s.fnf.encash === 'basic26' ? 'selected' : ''}>Basic ÷ 26 per day</option><option value="gross30" ${s.fnf.encash === 'gross30' ? 'selected' : ''}>Gross ÷ 30 per day</option></select></label>
+      <label>Notice shortfall recovered at<select data-g="fnf.recovery"><option value="basic" ${s.fnf.recovery === 'basic' ? 'selected' : ''}>Basic ÷ 30 per day</option><option value="gross" ${s.fnf.recovery === 'gross' ? 'selected' : ''}>Gross ÷ 30 per day</option></select></label>
       <label>Interview reports: smallest group shown<input type="number" data-g="interview.threshold" value="${esc(s.interview.threshold)}" class="ex-num"></label>
       <label>Alumni: leave out<input type="text" data-g="alumni.exclude" value="${esc(s.alumni.exclude)}"></label>
       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-g="alumni.on" ${s.alumni.on ? 'checked' : ''}> Alumni network on</label></div></details>`;
@@ -433,7 +532,7 @@ function renderSetup() {
     row[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
   }));
   sec.querySelectorAll('[data-c]').forEach(el => el.addEventListener('input', () => { s.contacts[el.dataset.c] = el.value; }));
-  sec.querySelectorAll('[data-g]').forEach(el => el.addEventListener(el.type === 'checkbox' ? 'change' : 'input', () => {
+  sec.querySelectorAll('[data-g]').forEach(el => el.addEventListener(el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input', () => {
     const [a, b] = el.dataset.g.split('.');
     s[a][b] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
   }));

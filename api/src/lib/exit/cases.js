@@ -83,7 +83,7 @@ const summary = k => ({
   id: k.id, client: k.client, name: k.employee.name, code: k.employee.code, phone: k.employee.phone, dept: k.employee.dept, level: k.employee.level, designation: k.employee.designation,
   typeId: k.typeId, typeName: k.typeName, category: k.category, raisedBy: k.raisedBy, source: k.source, formal: k.formal, lwd: k.lwd, noticeDays: k.noticeDays, waiverDays: k.waiverDays,
   stage: k.stage, status: k.status, createdAt: k.createdAt, next: (k.plan || []).find(s => s.status === 'planned' || s.status === 'due') || null,
-  red: (k.alerts || []).filter(a => a.open).length
+  red: (k.alerts || []).filter(a => a.open).length, fnfStatus: (k.fnf && k.fnf.status) || 'Not started'
 });
 
 async function raise(store, setup, input, ctx, user) {

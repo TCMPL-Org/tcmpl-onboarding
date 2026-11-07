@@ -127,6 +127,7 @@ test('walkthrough clock: jump to the last day, run what is due (old steps marked
   let r = await act('walk', { id: ID, action: 'jump', anchor: 'lwd', day: 0, time: '10:30' });
   assert.equal(r.status, 200);
   assert.equal((await act('case', { id: ID })).jsonBody.today, '2026-12-19');
+  await act('fnf', { id: ID, inputs: { gross: 80000, basic: 40000, leaveDays: 10 } });
   mails.length = 0;
   r = await act('walk', { id: ID, action: 'run' });
   const k = r.jsonBody.case;

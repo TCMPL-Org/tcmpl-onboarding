@@ -11,6 +11,7 @@ const S = require('./setup');
 const C = require('./cases');
 const R = require('./rules');
 const X = require('./send');
+const F = require('./fnf');
 
 const SYSTEM = { name: 'exit-agent' };
 const nowIso = () => new Date().toISOString();
@@ -55,7 +56,9 @@ async function action({ action: name, body, user }) {
         if (!rec) return json(404, { error: 'case_not_found' });
         const msgs = (await store.list('exit_messages')).map(m => m.data).filter(m => m && m.caseId === id).sort((a, b) => String(a.at).localeCompare(String(b.at)));
         const now = X.caseNow(rec.data);
-        return json(200, { case: rec.data, messages: msgs.slice(-200), today: R.todayIst(now), clock: rec.data.clockOffsetMs ? new Date(now).toISOString() : '' });
+        const { setup } = await S.load(store, rec.data.client);
+        return json(200, { case: rec.data, messages: msgs.slice(-200), today: R.todayIst(now), clock: rec.data.clockOffsetMs ? new Date(now).toISOString() : '',
+          fnf: F.compute(setup, rec.data), letters: F.lettersOf(setup, rec.data) });
       }
       case 'cancel': {
         const id = String(body.id || '');
@@ -75,7 +78,8 @@ async function action({ action: name, body, user }) {
         await store.put('exit_cases', id, k, user);
         return json(200, { case: k });
       }
-      case 'send': case 'step': case 'walk': case 'reply': return await caseAction(store, name, body, user);
+      case 'send': case 'step': case 'walk': case 'reply': case 'fnf': case 'fnf-status': case 'letters-send': case 'clearance': return await caseAction(store, name, body, user);
+      case 'letter': return await letterFile(store, body);
       default: return json(404, { error: 'unknown_action' });
     }
   } catch (e) {
@@ -110,6 +114,25 @@ async function caseAction(store, name, body, user) {
     if (!text) return json(400, { error: 'text_required' });
     const w = await whatsappReply(store, k, text, user);
     out = { result: w };
+  } else if (name === 'fnf') {
+    k.fnf = Object.assign({ status: 'Draft' }, k.fnf, { inputs: F.cleanInputs(body.inputs), updatedAt: nowIso(), updatedBy: user.name });
+    if (k.fnf.status === 'Approved' || k.fnf.status === 'Needs correction' || k.fnf.status === 'Sent for approval') k.fnf.status = 'Draft';
+    X.log(k, 'F&F figures updated by HR.', user);
+    out = { fnf: F.compute(setup, k) };
+  } else if (name === 'fnf-status') {
+    const st = String(body.status || '');
+    if (!['Draft', 'Approved', 'Wages paid', 'Gratuity paid', 'Closed'].includes(st)) return json(400, { error: 'bad_status' });
+    k.fnf = Object.assign({}, k.fnf, { status: st }, st === 'Wages paid' ? { wagesPaidAt: nowIso() } : st === 'Gratuity paid' ? { gratuityPaidAt: nowIso() } : {});
+    if (st === 'Closed') { k.status = 'closed'; k.closedAt = nowIso(); }
+    X.log(k, st === 'Closed' ? 'Case closed by HR.' : `F&F marked "${st}" by HR.`, user);
+  } else if (name === 'letters-send') {
+    out = { result: await X.sendLetters(store, setup, k, Array.isArray(body.names) ? body.names.map(String) : [], user) };
+  } else if (name === 'clearance') {
+    const o = (setup.owners || []).find(x => x.id === body.owner);
+    const st = String(body.status || '');
+    if (!o || !['open', 'cleared', 'issue'].includes(st)) return json(400, { error: 'bad_clearance' });
+    k.clearances = Object.assign({}, k.clearances, { [o.id]: Object.assign({ area: o.area }, (k.clearances || {})[o.id], { status: st, at: nowIso(), by: user.name }) });
+    X.log(k, `${o.area} clearance set to "${st}" by HR.`, user);
   } else if (name === 'walk') {
     const a = String(body.action || '');
     if (a === 'jump') {
@@ -138,6 +161,19 @@ async function caseAction(store, name, body, user) {
   await alertHr(store, k);
   await store.put('exit_cases', id, k, user);
   return json(200, Object.assign({ case: k }, out));
+}
+
+async function letterFile(store, body) {
+  const id = String(body.id || '');
+  if (!ID_RE.test(id)) return json(400, { error: 'bad_id' });
+  const rec = await store.get('exit_cases', id);
+  if (!rec) return json(404, { error: 'case_not_found' });
+  const { setup } = await S.load(store, rec.data.client);
+  const name = String(body.name || '');
+  if (!F.lettersOf(setup, rec.data).concat(['F&F statement']).includes(name)) return json(400, { error: 'unknown_letter' });
+  const a = F.attachment(setup, rec.data, name);
+  if (!a) return json(400, { error: 'not_ready' });
+  return json(200, { name: a.name, base64: a.base64 });
 }
 
 async function whatsappReply(store, k, text, user) {
@@ -208,7 +244,7 @@ async function handle(m, store) {
     k.lastAutoReplyAt = now;
   }
   // The employee just wrote, so the 24-hour window is open: send anything that was held.
-  if (wa.waConfigured()) await X.replayHeld(store, k).catch(e => console.error('exit replay failed', e && e.message));
+  if (wa.waConfigured()) await X.replayHeld(store, k, (await S.load(store, k.client)).setup).catch(e => console.error('exit replay failed', e && e.message));
   await alertHr(store, k);
   await store.put('exit_cases', k.id, k, SYSTEM);
 }
@@ -229,6 +265,12 @@ async function tick(store, now = Date.now()) {
       return s;
     });
     if (setup.sending && setup.sending.auto) sent += await X.runDue(store, setup, k, SYSTEM, now);
+    // Legal deadlines: wages within the working days set in Exit setup, gratuity within its days.
+    const c = F.compute(setup, k), today = R.todayIst(cnow), st = (k.fnf && k.fnf.status) || '';
+    if (c && !c.missing.length) {
+      if (today > c.wageDue && !['Wages paid', 'Gratuity paid', 'Closed'].includes(st)) X.alert(k, `Wages part of the F&F was due by ${R.niceDate(c.wageDue)} and is not marked paid.`);
+      if (c.gratuity && today > c.gratDue && st !== 'Gratuity paid' && st !== 'Closed') X.alert(k, `Gratuity was due by ${R.niceDate(c.gratDue)} and is not marked paid.`);
+    }
     if (JSON.stringify([k.plan, k.alerts, k.approvals, k.held]) !== before) { await alertHr(store, k); await store.put('exit_cases', rec.id, k, SYSTEM); cases++; }
   }
   return { ok: true, cases, due, sent };
@@ -236,7 +278,7 @@ async function tick(store, now = Date.now()) {
 
 /* ---------------- One-click links with m: 'exit' (approvals and clearances, next batch) ---------------- */
 function page(text, ok) {
-  const body = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Exit</title></head><body style="font-family:Segoe UI,Arial,sans-serif;background:#f4f7f7;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center"><div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:440px;box-shadow:0 2px 12px rgba(0,0,0,.08)"><div style="font-size:32px">${ok ? '✓' : '!'}</div><p style="font-size:16px;color:#1d2a30">${String(text).replace(/[<>&]/g, '')}</p><p style="font-size:12px;color:#667">TCMPL AI Exit Agent</p></div></body></html>`;
+  const body = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Exit</title></head><body style="font-family:Segoe UI,Arial,sans-serif;background:#f4f7f7;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center"><div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:440px;box-shadow:0 2px 12px rgba(0,0,0,.08)"><div style="font-size:32px">${ok ? '✓' : '!'}</div><p style="font-size:16px;color:#1d2a30">${String(text).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c])}</p><p style="font-size:12px;color:#667">TCMPL AI Exit Agent</p></div></body></html>`;
   return { status: ok ? 200 : 400, body, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } };
 }
 async function confirm(p) {

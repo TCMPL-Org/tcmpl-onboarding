@@ -62,7 +62,8 @@ function cleanSetup(s) {
   out.contacts = {};
   for (const k of Object.keys(d.contacts)) out.contacts[k] = str(c[k], k === 'company' ? 120 : 400);
   const f = Object.assign({}, d.fnf, s.fnf);
-  out.fnf = { approver: str(f.approver, 60) || 'Client HR', wageDays: num(f.wageDays, 0, 60, 2), gratYears: num(f.gratYears, 0, 10, 5), gratDays: num(f.gratDays, 0, 90, 30) };
+  out.fnf = { approver: str(f.approver, 60) || 'Client HR', wageDays: num(f.wageDays, 0, 60, 2), gratYears: num(f.gratYears, 0, 10, 5), fteGratYears: num(f.fteGratYears, 0, 10, 1), gratDays: num(f.gratDays, 0, 90, 30),
+    gratCap: num(f.gratCap, 0, 1e8, 2000000), encash: oneOf(f.encash, ['basic26', 'gross30'], 'basic26'), recovery: oneOf(f.recovery, ['basic', 'gross'], 'basic') };
   out.interview = { threshold: num((s.interview || d.interview).threshold, 1, 50, 5) };
   const al = Object.assign({}, d.alumni, s.alumni);
   out.alumni = { on: al.on !== undefined ? bool(al.on) : true, exclude: str(al.exclude, 120) };

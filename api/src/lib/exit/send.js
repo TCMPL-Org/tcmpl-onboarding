@@ -11,6 +11,7 @@ const wa = require('../whatsapp');
 const email = require('../email');
 const links = require('../links');
 const R = require('./rules');
+const F = require('./fnf');
 
 const nowIso = () => new Date().toISOString();
 const IST = 330 * 60000;
@@ -48,54 +49,65 @@ function ownerContact(k, o) {
 }
 const link = (k, p) => links.link(Object.assign({ m: 'exit', c: k.id }, p), 90);
 
-async function mail(setup, k, { to, subject, text, buttons }) {
+async function mail(setup, k, { to, subject, text, buttons, attachments }) {
   if (!email.emailConfigured()) return { ok: false, note: 'email is not connected' };
   if (!email.addresses(to).length) return { ok: false, note: 'no email address' };
   try {
-    await email.send({ to, cc: setup.contacts.cc, replyTo: setup.contacts.replyTo || setup.contacts.hr, subject: `${subject} · ${company(setup, k)}`, text, buttons });
+    await email.send({ to, cc: setup.contacts.cc, replyTo: setup.contacts.replyTo || setup.contacts.hr, subject: `${subject} · ${company(setup, k)}`, text, buttons, attachments: (attachments || []).map(a => ({ name: a.name, contentType: a.contentType, base64: a.base64 })) });
     return { ok: true };
   } catch (e) { return { ok: false, note: e.message }; }
 }
 
-// WhatsApp to the employee; held when the 24-hour window is closed.
-async function whatsappEmployee(store, k, text, by, about) {
+// WhatsApp to the employee (text, then any letters as PDF documents); held when the 24-hour window is closed.
+async function waOne(store, k, item, by, about, setup) {
+  if (item.letter) {
+    const a = F.attachment(setup, k, item.letter);
+    if (!a) return;
+    const mediaId = await wa.uploadMedia(a.buffer, 'application/pdf', a.name);
+    const r = await wa.sendDocument(k.employee.phone, mediaId, a.name, item.letter);
+    await saveMsg(store, { caseId: k.id, text: `[PDF] ${a.name}`, waId: r.id || '', by: by.name || by, source: about, kind: 'document' });
+    return;
+  }
+  const r = await wa.sendText(k.employee.phone, item.text);
+  await saveMsg(store, { caseId: k.id, text: item.text, waId: r.id || '', by: by.name || by, source: about, kind: 'text' });
+}
+
+async function whatsappEmployee(store, k, text, by, about, setup, letters = []) {
   const phone = k.employee.phone;
   if (!phone) return { ok: false, note: 'no mobile number' };
   if (!wa.waConfigured()) return { ok: false, note: 'WhatsApp is not connected' };
-  try {
-    const r = await wa.sendText(phone, text);
-    await saveMsg(store, { caseId: k.id, text, waId: r.id || '', by: by.name, source: about, kind: 'text' });
-    return { ok: true };
-  } catch (e) {
-    if (!windowClosed(e)) { await saveMsg(store, { caseId: k.id, text, error: e.message, by: by.name, source: about, kind: 'text' }); return { ok: false, note: e.message }; }
-    k.held = (k.held || []).concat([{ text, about, by: by.name, at: nowIso() }]).slice(-10);
-    let note = 'held until the employee next writes (24-hour window closed)';
-    const tpl = (process.env.WHATSAPP_NUDGE_TEMPLATE || '').trim();
-    if (tpl && (!k.nudgedAt || Date.now() - Date.parse(k.nudgedAt) > 12 * 3600e3)) {
-      try {
-        const first = (k.employee.name || '').split(' ')[0] || 'there';
-        const t = await wa.sendNamedTemplate(phone, tpl, process.env.WHATSAPP_NUDGE_TEMPLATE_LANG || 'en', [first, 'your exit formalities']);
-        k.nudgedAt = nowIso(); note += '; reminder template sent';
-        await saveMsg(store, { caseId: k.id, text: `[Template ${tpl}] reminder to reply`, waId: t.id || '', by: by.name, source: 'system', kind: 'template' });
-      } catch (te) { note += '; template failed: ' + te.message; }
+  const items = (text ? [{ text }] : []).concat(letters.map(letter => ({ letter })));
+  for (let i = 0; i < items.length; i++) {
+    try { await waOne(store, k, items[i], by, about, setup); }
+    catch (e) {
+      if (!windowClosed(e)) { await saveMsg(store, { caseId: k.id, text: items[i].text || `[PDF] ${items[i].letter}`, error: e.message, by: by.name, source: about, kind: 'text' }); return { ok: i > 0, note: e.message }; }
+      k.held = (k.held || []).concat(items.slice(i).map(x => Object.assign({ about, by: by.name, at: nowIso() }, x))).slice(-20);
+      let note = 'held until the employee next writes (24-hour window closed)';
+      const tpl = (process.env.WHATSAPP_NUDGE_TEMPLATE || '').trim();
+      if (tpl && (!k.nudgedAt || Date.now() - Date.parse(k.nudgedAt) > 12 * 3600e3)) {
+        try {
+          const first = (k.employee.name || '').split(' ')[0] || 'there';
+          const t = await wa.sendNamedTemplate(phone, tpl, process.env.WHATSAPP_NUDGE_TEMPLATE_LANG || 'en', [first, 'your exit formalities']);
+          k.nudgedAt = nowIso(); note += '; reminder template sent';
+          await saveMsg(store, { caseId: k.id, text: `[Template ${tpl}] reminder to reply`, waId: t.id || '', by: by.name, source: 'system', kind: 'template' });
+        } catch (te) { note += '; template failed: ' + te.message; }
+      }
+      await saveMsg(store, { caseId: k.id, text: items.slice(i).map(x => x.text || `[PDF] ${x.letter}`).join('\n'), error: note, by: by.name, source: about, kind: 'held' });
+      return { ok: false, held: true, note };
     }
-    await saveMsg(store, { caseId: k.id, text, error: note, by: by.name, source: about, kind: 'held' });
-    return { ok: false, held: true, note };
   }
+  return { ok: true };
 }
 
 // The employee just wrote: send everything that was held.
-async function replayHeld(store, k) {
+async function replayHeld(store, k, setup) {
   const held = k.held || [];
   if (!held.length) return 0;
   k.held = [];
   let n = 0;
   for (const h of held) {
-    try {
-      const r = await wa.sendText(k.employee.phone, h.text);
-      await saveMsg(store, { caseId: k.id, text: h.text, waId: r.id || '', by: h.by, source: h.about, kind: 'text' });
-      n++;
-    } catch { k.held.push(h); }
+    try { await waOne(store, k, h, { name: h.by || 'exit-agent' }, h.about, setup || {}); n++; }
+    catch { k.held.push(h); }
   }
   if (n) {
     k.plan = (k.plan || []).map(s => (s.status === 'held' && !k.held.some(h => h.about === s.key) ? Object.assign({}, s, { status: 'sent', at: nowIso(), note: (s.note || '') + ' · WhatsApp sent when the employee wrote' }) : s));
@@ -146,6 +158,27 @@ async function emailOwners(setup, k, step, text, by, onlyOpen) {
   return notes;
 }
 
+const allCleared = (setup, k) => (setup.owners || []).every(o => ((k.clearances || {})[o.id] || {}).status === 'cleared');
+
+// HR sends chosen letters to the employee (email + WhatsApp), e.g. once clearances are complete.
+async function sendLetters(store, setup, k, names, by) {
+  const valid = F.lettersOf(setup, k).concat(['F&F statement']);
+  const letters = (names || []).filter(n => valid.includes(n));
+  if (!letters.length) return { ok: false, notes: ['no letters chosen'] };
+  const atts = letters.map(n => F.attachment(setup, k, n)).filter(Boolean);
+  const first = (k.employee.name || '').split(' ')[0] || 'there';
+  const text = `Hi ${first}, please find attached: ${letters.join(', ')}.`;
+  const notes = [];
+  let ok = false;
+  const w = await whatsappEmployee(store, k, text, by, 'letters', setup, letters);
+  notes.push(w.ok ? 'WhatsApp sent' : 'WhatsApp: ' + w.note); ok = ok || w.ok || Boolean(w.held);
+  const m = await mail(setup, k, { to: k.employee.email, subject: letters.join(', '), text, attachments: atts });
+  notes.push(m.ok ? 'email sent' : 'email: ' + m.note); ok = ok || m.ok;
+  if (ok) { k.letters = Object.assign({}, k.letters); letters.forEach(n => { k.letters[n] = { sentAt: nowIso(), step: 'hr' }; }); }
+  log(k, `Letters (${letters.join(', ')}): ${notes.join(' · ')}.`, by);
+  return { ok, notes };
+}
+
 /* ---------------- one step ---------------- */
 async function sendStep(store, setup, k, key, by) {
   const s = (k.plan || []).find(x => x.key === key);
@@ -164,18 +197,37 @@ async function sendStep(store, setup, k, key, by) {
     notes.push(...await emailOwners(setup, k, s, text, by, key !== 'clearance-start'));
     sent = notes.filter(n => /: emailed$/.test(n)).length;
   } else if (s.to === 'employee') {
+    let letters = F.lettersForStep(setup, k, key);
+    if (key === 'lastday' && letters.length && !allCleared(setup, k)) { notes.push('letters wait until every clearance is confirmed (send them from Clearances and F&F)'); letters = []; }
+    if (key === 'fnf-paid' && !F.compute(setup, k)) letters = [];
+    const atts = letters.map(n => F.attachment(setup, k, n)).filter(Boolean);
+    if (atts.length) notes.push(`${atts.length} PDF${atts.length > 1 ? 's' : ''}: ${letters.join(', ')}`);
     if (wantWa) {
-      const r = await whatsappEmployee(store, k, text, by, key);
+      const r = await whatsappEmployee(store, k, text, by, key, setup, letters);
       if (r.ok) { sent++; notes.push('WhatsApp sent'); } else { held = Boolean(r.held); notes.push('WhatsApp: ' + r.note); }
     }
     if (wantMail || (wantWa && !k.employee.phone)) {
-      const r = await mail(setup, k, { to: k.employee.email, subject: s.title, text });
+      const r = await mail(setup, k, { to: k.employee.email, subject: s.title, text, attachments: atts });
       if (r.ok) { sent++; notes.push('email sent'); } else notes.push('email: ' + r.note);
     }
+    if (atts.length && sent) { k.letters = Object.assign({}, k.letters); letters.forEach(n => { k.letters[n] = { sentAt: nowIso(), step: key }; }); }
   } else {
     const to = s.to === 'manager' ? k.employee.managerEmail : (setup.contacts || {})[s.to];
-    const buttons = key === 'handover' ? [{ label: 'Handover is complete', url: link(k, { a: 'step', k: key, v: 'done' }) }] : [];
-    const r = await mail(setup, k, { to, subject: `${s.title}: ${k.employee.name}`, text, buttons });
+    let buttons = key === 'handover' ? [{ label: 'Handover is complete', url: link(k, { a: 'step', k: key, v: 'done' }) }] : [];
+    let atts = [], body = text;
+    if (key === 'fnf-draft') {
+      const c = F.compute(setup, k);
+      if (!c || c.missing.length) { alert(k, `F&F cannot be worked out yet: add ${c ? c.missing.join(', ') : 'the last working day'} in Clearances and F&F.`); notes.push('F&F inputs missing'); }
+      else {
+        atts = [F.attachment(setup, k, 'F&F statement')];
+        body = `${text}
+
+Wages part: ${F.inr(c.wagesNet)} (pay by ${R.niceDate(c.wageDue)})${c.gratuity ? `. Gratuity: ${F.inr(c.gratuity)} (pay by ${R.niceDate(c.gratDue)})` : ''}. Net payable: ${F.inr(c.net)}.`;
+        buttons = [{ label: 'Approve F&F', url: link(k, { a: 'fnf', v: 'yes' }) }, { label: 'Needs correction', url: link(k, { a: 'fnf', v: 'no' }), secondary: true }];
+      }
+    }
+    const r = (key === 'fnf-draft' && !atts.length) ? { ok: false, note: 'F&F inputs missing' } : await mail(setup, k, { to, subject: `${s.title}: ${k.employee.name}`, text: body, buttons, attachments: atts });
+    if (r.ok && key === 'fnf-draft') { k.fnf = Object.assign({}, k.fnf, { status: 'Sent for approval', sentAt: nowIso() }); }
     if (r.ok) { sent++; notes.push(`email sent to ${s.to}`); }
     else { notes.push(`${s.to}: ${r.note}`); if (r.note === 'no email address') alert(k, `No email for ${s.to} (step "${s.title}"). Add it in ${s.to === 'manager' ? 'the case (manager email)' : 'Exit setup → Company and contacts'}.`); }
   }
@@ -240,6 +292,15 @@ async function onLink(store, setup, k, p) {
     log(k, `${o.area} clearance: ${p.v === 'ok' ? 'confirmed' : 'something is pending'} (email).`, by);
     return { ok: true, msg: p.v === 'ok' ? `Thank you. ${o.area} clearance for ${k.employee.name} is recorded.` : 'Thank you. HR has been told and will follow up.' };
   }
+  if (p.a === 'fnf') {
+    const st = (k.fnf && k.fnf.status) || '';
+    if (st !== 'Sent for approval') return { ok: true, msg: `Thank you. The F&F is already ${st ? st.toLowerCase() : 'not sent for approval'}.` };
+    if (p.v === 'yes') { k.fnf = Object.assign({}, k.fnf, { status: 'Approved', approvedAt: nowIso() }); log(k, 'F&F approved by payroll (email).', by); return { ok: true, msg: 'Thank you. The F&F is approved; please pay the wages part by the date in the email.' }; }
+    k.fnf = Object.assign({}, k.fnf, { status: 'Needs correction', correctionAt: nowIso() });
+    alert(k, 'Payroll says the F&F needs correction. Check the figures in Clearances and F&F and send it again.');
+    log(k, 'F&F: payroll asked for a correction (email).', by);
+    return { ok: true, msg: 'Thank you. HR has been told the F&F needs correction.' };
+  }
   if (p.a === 'step') {
     const s = (k.plan || []).find(x => x.key === p.k);
     if (!s) return { ok: false, msg: 'This step is no longer part of the case.' };
@@ -250,4 +311,4 @@ async function onLink(store, setup, k, p) {
   return { ok: false, msg: 'Unknown action.' };
 }
 
-module.exports = { sendStep, runDue, replayHeld, askApprovers, onLink, caseNow, stepTime, inQuietHours, windowClosed, alert, log };
+module.exports = { sendLetters, allCleared, sendStep, runDue, replayHeld, askApprovers, onLink, caseNow, stepTime, inQuietHours, windowClosed, alert, log };

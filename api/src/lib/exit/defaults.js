@@ -122,7 +122,7 @@ function tcmplDefault() {
     owners: OWNERS,
     people: PEOPLE,
     contacts: { company: '', hr: '', payroll: '', recruitment: '', replyTo: '', cc: '' },
-    fnf: { approver: 'Client HR', wageDays: 2, gratYears: 5, gratDays: 30 },
+    fnf: { approver: 'Client HR', wageDays: 2, gratYears: 5, fteGratYears: 1, gratDays: 30, gratCap: 2000000, encash: 'basic26', recovery: 'basic' },
     interview: { threshold: 5 },
     alumni: { on: true, exclude: 'Misconduct exits' },
     sending: { auto: false }, // off: HR sends each step from Case journey; on: due steps go out by themselves (8 am - 9 pm IST)

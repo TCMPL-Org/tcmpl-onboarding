@@ -50,3 +50,5 @@
 .ex-step.ex-held .chip,.ex-step.ex-missed .chip{background:#fff4dc;color:#8a5a00}
 .ex-step.ex-failed .chip{background:#fde8e7;color:#b42318}
 .ex-walk{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px}
+.ex-fnf .ex-r,.ex-tbl .ex-r{text-align:right;white-space:nowrap}
+.ex-fnf .ex-b td{font-weight:700}
