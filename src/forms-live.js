@@ -82,6 +82,7 @@ function mount() {
   $('#flPdf').onclick = () => download([fSel]);
   $('#flPdfAll').onclick = () => download(forms.filter(f => f.applies).map(f => f.id));
   document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab === 'forms') reload(); }));
+  const cs = document.querySelector('#clientSel'); if (cs) cs.addEventListener('change', () => setTimeout(reload, 60));
   reload();
   return true;
 }
@@ -103,7 +104,7 @@ async function reload() {
   const h = await u.loadHealth();
   if (h.db) {
     const r = await u.getJson('/api/data/candidates').catch(() => ({ ok: false }));
-    if (r.ok) cands = (r.body.items || []).map(i => Object.assign({ id: i.id }, i.data)).filter(c => c.profile || c.offerId)
+    if (r.ok) cands = (r.body.items || []).map(i => Object.assign({ id: i.id }, i.data)).filter(c => c.profile || c.offerId).filter(c => !window.tcmplOfClient || window.tcmplOfClient(c))
       .sort((a, b) => String(b.releasedAt || '').localeCompare(String(a.releasedAt || '')));
   }
   if (selected !== DEMO && !cands.some(c => c.id === selected)) selected = DEMO;

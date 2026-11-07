@@ -100,8 +100,8 @@ function mount() {
   </div>
   <div class="card jl-stagebar" id="jlStages"></div>
   <div id="jlEmpty" class="card jl-empty" style="display:none">
-    <h3>No released offers yet</h3>
-    <p class="note">Release an offer from the Offer desk with the candidate's WhatsApp number. The candidate then appears here with their journey and their real WhatsApp chat.</p>
+    <h3>No candidates for this client yet</h3>
+    <p class="note">Each client has its own candidates. Pick another client at the top, or release an offer from the Offer desk with this client selected and the candidate's WhatsApp number. The candidate then appears here with their journey and their real WhatsApp chat.</p>
   </div>
   <div class="jl-grid" id="jlGrid">
     <div class="card jl-tps" id="jlTps"></div>
@@ -130,6 +130,7 @@ function mount() {
   $('#jlForm').onsubmit = sendOwn;
   setInterval(() => { if (!sec.hidden && !demoOn() && document.visibilityState === 'visible') loadMsgs(false); }, POLL_MS);
   document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab === 'journey' && !demoOn()) reload(selected); }));
+  const cs = $('#clientSel'); if (cs) cs.addEventListener('change', () => setTimeout(() => { if (!demoOn()) reload(selected); }, 60));
   applyMode();
   return true;
 }
@@ -160,8 +161,18 @@ async function reload(want, stepId) {
   if (!health.db) { cands = []; renderAll(); return; }
   const r = await u.getJson('/api/data/candidates').catch(() => ({ ok: false }));
   if (!r.ok) return;
-  cands = (r.body.items || []).map(i => Object.assign({ id: i.id }, i.data))
+  const all = (r.body.items || []).map(i => Object.assign({ id: i.id }, i.data));
+  // Opening a candidate of another client (e.g. from HR view, all clients) switches the client first.
+  const w = want && all.find(c => c.id === want);
+  const wc = w && w.profile && w.profile.client;
+  if (wc && window.tcmplOfClient && !window.tcmplOfClient(w) && $('#clientSel') && [...$('#clientSel').options].some(o => o.value === wc)) {
+    $('#clientSel').value = wc; $('#clientSel').dispatchEvent(new Event('change'));
+    const jb = document.querySelector('nav.tabs button[data-tab="journey"]'); if (jb) jb.setAttribute('aria-selected', 'true');
+    document.querySelectorAll('section.tab').forEach(s => { s.hidden = s.id !== 'tab-journey'; });
+  }
+  cands = all
     .filter(c => c.profile || c.offerId || (c.stage && c.stage !== 'Unknown contact'))
+    .filter(c => !window.tcmplOfClient || window.tcmplOfClient(c))
     .sort((a, b) => String(b.releasedAt || b.lastMessageAt).localeCompare(String(a.releasedAt || a.lastMessageAt)));
   if (want && cands.some(c => c.id === want)) { if (selected !== want && !stepId) { sel = null; preview = null; } selected = want; }
   if (!cands.some(c => c.id === selected)) { selected = cands[0] ? cands[0].id : null; sel = null; preview = null; }

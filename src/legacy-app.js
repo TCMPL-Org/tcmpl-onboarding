@@ -506,6 +506,8 @@ window.tcmplClientId=()=>client.id;
 window.tcmplReadyFor=(profile)=>tcmplSandbox(profile,()=>readyTemplate().map(r=>({k:r.k,task:r.task,owner:r.own(),due:r.due})));
 window.tcmplShortName=()=>cv('short')||client.label;
 window.tcmplClientLabel=()=>client.label;
+// Candidates belong to the client they were released under; lists show only the selected client's candidates.
+window.tcmplOfClient=(c,all)=>all||((c&&c.profile&&c.profile.client)||'default')===client.id;
 window.tcmplClientFacts=()=>({address:cv('address')||'',reportTime:cv('reportTime')||'',poc:cv('meet')||'',dress:cv('dress')||'',bring:cv('bring')||'',mapUrl:cv('mapLink')||'',company:cv('short')||client.label});
 window.tcmplInductionDefaults=()=>({items:JSON.parse(JSON.stringify(client.ov.plan||DEFAULT_PLAN)),quiz:JSON.parse(JSON.stringify(cv('quiz')||[]))});
 window.tcmplPlanFor=(profile)=>tcmplSandbox(profile,()=>S.plan.map(tp=>{ const inf=tpInfo(tp.key); const d=new Date(S.c.doj.getTime()+(tp.abs-S.gap)*DAY); return {key:tp.key,label:inf.t,track:inf.k,rel:relLabel(tp.abs),date:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}; }));

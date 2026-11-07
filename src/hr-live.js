@@ -29,6 +29,7 @@ function mount() {
           <button class="btn small" data-f="red" type="button">Needs HR</button>
           <button class="btn small" data-f="week" type="button">Joining in 7 days</button>
           <button class="btn small" data-f="held" type="button">Waiting for reply</button>
+          <label class="note" style="display:inline-flex;gap:4px;align-items:center;margin-left:8px"><input type="checkbox" id="hlAll"> All clients</label>
         </div>
         <button class="btn small" id="hlRefresh" type="button">Refresh</button>
       </div>
@@ -38,6 +39,8 @@ function mount() {
   $('#hlRefresh').onclick = load;
   document.querySelectorAll('#hlFilters [data-f]').forEach(b => { b.onclick = () => { filter = b.dataset.f; render(); }; });
   document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab === 'hr') load(); }));
+  if ($('#hlAll')) $('#hlAll').onchange = () => load();
+  const cs = document.querySelector('#clientSel'); if (cs) cs.addEventListener('change', () => setTimeout(() => { if (!document.querySelector('#tab-hr').hidden) load(); }, 60));
   load();
   return true;
 }
@@ -51,7 +54,8 @@ async function load() {
     const [cr, dr] = await Promise.all([u.getJson('/api/data/candidates'), u.getJson('/api/data/documents')].map(p => p.catch(() => ({ ok: false }))));
     if (!cr.ok) return;
     const docs = dr.ok ? (dr.body.items || []).map(i => i.data) : [];
-    const cands = (cr.body.items || []).map(i => Object.assign({ id: i.id }, i.data)).filter(c => c.profile || c.offerId);
+    const allC = $('#hlAll') && $('#hlAll').checked;
+    const cands = (cr.body.items || []).map(i => Object.assign({ id: i.id }, i.data)).filter(c => c.profile || c.offerId).filter(c => !window.tcmplOfClient || window.tcmplOfClient(c, allC));
     rows = [];
     for (const c of cands) {
       let sm = null;
