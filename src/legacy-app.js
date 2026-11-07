@@ -1178,7 +1178,7 @@ function renameClient(){
   const name=(window.prompt('Client name',client.label)||'').trim(); if(!name||name===client.label) return;
   client.label=name; const o=[...$('#clientSel').options].find(x=>x.value===client.id); if(o) o.textContent=name; saveCfg();
 }
-$('#cfgAddClient').onclick=addClient; $('#cfgRenameClient').onclick=renameClient;
+$('#hdrAddClient').onclick=addClient; $('#cfgRenameClient').onclick=renameClient;
 $('#clientSel').value=client.id;
 function applyClient(restart){
   const m=cv('offerMode'); $('#modeMake').hidden=m==='upload'; $('#modeUpload').hidden=m==='make'; setMode(m==='upload'?'upload':'make');
