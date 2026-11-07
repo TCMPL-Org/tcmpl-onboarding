@@ -17,10 +17,10 @@ const PHASES = [
   { id: 'docs', label: 'Documents' },
   { id: 'forms', label: 'Joining forms' },
   { id: 'pre', label: 'Pre-joining' },
-  { id: 'ready', label: 'Day-1 readiness' },
+  { id: 'ready', label: 'Last week before joining' },
   { id: 'day1', label: 'Joining day' },
-  { id: 'induct', label: 'Induction' },
-  { id: 'p90', label: 'First 90 days' },
+  { id: 'induct', label: 'Days 1–30 · induction' },
+  { id: 'p90', label: 'Days 31–90' },
   { id: 'close', label: 'Closure' }
 ];
 // Legacy demo steps that the client's journey check-ins replace (when check-ins are on).
@@ -331,6 +331,14 @@ function buildSteps(c) {
     s.status = st;
   }
   const order = PHASES.map(x => x.id);
+  // Stages follow the calendar: every dated step sits in the stage its date falls in, so nothing that happens
+  // earlier is listed later. Offer, documents, forms and closure stay as their own stages.
+  const FIXED = new Set(['offer', 'docs', 'forms', 'close']);
+  if (doj) for (const s of out) {
+    if (FIXED.has(s.phase) || !s.date) continue;
+    const d = Math.round((Date.parse(s.date) - Date.parse(doj)) / 864e5);
+    s.phase = d < -7 ? 'pre' : d < 0 ? 'ready' : d === 0 ? 'day1' : d <= 30 ? 'induct' : 'p90';
+  }
   out.sort((a, b) => order.indexOf(a.phase) - order.indexOf(b.phase) || String(a.date).localeCompare(String(b.date)) || String(a.time || '').localeCompare(String(b.time || '')));
   return out;
 }
@@ -451,12 +459,18 @@ function renderTps() {
   const c = current(), box = $('#jlTps');
   if (!c) { box.innerHTML = ''; return; }
   const ns = nextStep();
-  let html = '';
+  const today = todayIso();
+  let html = '', todayShown = false;
+  const mark = s => {
+    if (todayShown || ['offer', 'docs', 'forms'].includes(s.phase) || !s.date || s.date <= today) return '';
+    todayShown = true;
+    return `<div class="jl-today">Today · ${esc(shortDate(today))}${clockOff ? ' (walkthrough clock)' : ''}</div>`;
+  };
   for (const ph of PHASES) {
     const ss = steps.filter(s => s.phase === ph.id);
     if (!ss.length) continue;
     html += `<div class="jl-ph ${phaseState(ph.id)}" id="jlph-${ph.id}">${esc(ph.label)}</div>`;
-    html += ss.map(s => `<button type="button" class="tlitem jl-tp ${sel === s.id ? 'sel' : ''} ${s.kind === 'owner' ? 'owner' : ''} ${ns && ns.id === s.id ? 'now' : ''}" data-id="${esc(s.id)}">
+    html += ss.map(s => mark(s) + `<button type="button" class="tlitem jl-tp ${sel === s.id ? 'sel' : ''} ${s.kind === 'owner' ? 'owner' : ''} ${ns && ns.id === s.id ? 'now' : ''}" data-id="${esc(s.id)}">
       <div class="when">${esc(s.rel)}<br><span style="font-weight:500">${esc(shortDate(s.date))}</span></div>
       <div>${ns && ns.id === s.id ? '<span class="chip teal" style="float:right">Now</span>' : ''}${s.kind === 'owner' ? '<div class="trk s">' + (s.track === 'm' ? 'Manager' : 'Owners') + '</div>' : ''}${esc(s.label)}<div class="st"><span class="${s.status.cls ? 'jl-st-' + s.status.cls : 'note'}">${esc(s.status.text)}</span></div></div></button>`).join('');
   }
