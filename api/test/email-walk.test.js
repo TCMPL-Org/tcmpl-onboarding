@@ -143,3 +143,21 @@ test('candidate gets an email copy of WhatsApp sends: offer letter attached with
   await handlers.formsAction({ action: 'send', body: { candidateId: id, files: [{ filename: 'Form 11.pdf', pdfBase64: 'JVBERi0xLjQK'.repeat(20) }] }, user });
   assert.equal(sentMail[0].attachments[0].name, 'Form_11.pdf');
 });
+
+test('a new red item emails HR at once (manager copied when switched on), only once', async () => {
+  const store = getStore();
+  const id = 'wa-917000000055';
+  await store.put('journeys', 'alertclient', { email: { replyTo: 'hr@example.com', cc: 'clienthr@example.com', alertManager: true }, checkins: { contacts: { hr: 'hrlead@example.com', manager: 'boss@example.com' } } }, user);
+  await store.put('candidates', id, { phone: '917000000055', name: 'Meera Iyer', profile: { doj: '2026-12-01', client: 'alertclient' } }, user);
+  sentMail.length = 0;
+  const r = await handlers.checkinAction({ action: 'answer', body: { candidateId: id, key: 'travel', value: 'Need travel' }, user });
+  assert.equal(r.status, 200);
+  const m = sentMail.find(x => /Action needed/.test(x.content.subject));
+  assert.ok(m, 'HR alert sent');
+  assert.equal(m.recipients.to[0].address, 'hrlead@example.com');
+  assert.deepEqual(m.recipients.cc.map(x => x.address).sort(), ['boss@example.com', 'clienthr@example.com', 'hr@example.com']);
+  assert.match(m.content.plainText, /Travel for joining.*Need travel/);
+  sentMail.length = 0;
+  await handlers.checkinAction({ action: 'answer', body: { candidateId: id, key: 'pulse-pre@-18', value: 'Excited' }, user });
+  assert.equal(sentMail.length, 0, 'no repeat alert');
+});

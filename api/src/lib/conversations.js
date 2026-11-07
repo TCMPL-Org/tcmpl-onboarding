@@ -405,8 +405,19 @@ async function withLatestFacts(store, cand) {
 
 async function handleInbound(m) {
   await handleInboundCore(m);
-  // The candidate just wrote, so the 24-hour window is open: send anything HR queued while it was closed.
   const store = getStore();
+  // New red items from this message (decline, "Need help", low rating, …) → email HR now.
+  if (store && m && m.from) {
+    try {
+      const id = wa.candidateIdFor(m.from);
+      const rec = await store.get('candidates', id);
+      if (rec && (rec.data.handovers || []).some(h => h && h.open && !h.alertedAt)) {
+        const cand = Object.assign({}, rec.data);
+        if (await notify.alertHandovers(store, id, cand)) await store.put('candidates', id, cand, SYSTEM);
+      }
+    } catch (e) { console.error('hr alert failed', e && e.message); }
+  }
+  // The candidate just wrote, so the 24-hour window is open: send anything HR queued while it was closed.
   if (store && m && m.from) await replayHeld(store, wa.candidateIdFor(m.from)).catch(e => console.error('replay failed', e && e.message));
 }
 

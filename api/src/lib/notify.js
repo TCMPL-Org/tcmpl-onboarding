@@ -107,6 +107,30 @@ async function toCandidate(store, candidateId, cand, { subject, text, options, a
   } catch (e) { console.error('candidate email failed', e && e.message); cand.lastEmailError = e.message; return false; }
 }
 
+// Every new red item (handover) is emailed to HR straight away: the client's HR contact from Journey setup, else
+// the Reply-to; the client's CC and, if set, the candidate's manager are copied (journeys/<client>.email.alertManager).
+async function alertHandovers(store, candidateId, cand) {
+  const fresh = (cand.handovers || []).filter(h => h && h.open && !h.alertedAt);
+  if (!fresh.length || !email.emailConfigured()) return 0;
+  const clientId = cand.profile && cand.profile.client;
+  const st = await settings(store, clientId);
+  const jr = clientId ? await store.get('journeys', String(clientId)).catch(() => null) : null;
+  const ck = (jr && jr.data && jr.data.checkins) || {};
+  const hr = email.addresses((ck.contacts && ck.contacts.hr) || '').concat(email.addresses(st.replyTo));
+  if (!hr.length) return 0;
+  const mgr = st.alertManager ? email.addresses((cand.contacts && cand.contacts.manager) || (ck.contacts && ck.contacts.manager) || '') : [];
+  const app = (process.env.APP_URL || 'https://lively-island-0f17b1b00.3.azurestaticapps.net').replace(/\/$/, '');
+  const p = cand.profile || {};
+  const text = `${cand.name || 'A candidate'}${cand.clientLabel ? ' (' + cand.clientLabel + ')' : ''}${p.doj ? ', joining ' + p.doj : ''}, needs attention:\n\n${fresh.map(h => '• ' + h.why).join('\n')}\n\nOpen Candidate journey to act: ${app}\n\nMobile: +${cand.phone || ''}${cand.email ? ' · ' + cand.email : ''}`;
+  try {
+    const r = await email.send({ to: hr[0], cc: [].concat(hr.slice(1), mgr, email.addresses(st.cc)), subject: `Action needed: ${cand.name || 'candidate'} · ${fresh[0].why.slice(0, 70)}`, text, buttons: [{ label: 'Open the tool', url: app }] });
+    const now = nowIso();
+    fresh.forEach(h => { h.alertedAt = now; });
+    logEmail(cand, { kind: 'hr-alert', to: r.to, cc: r.cc, subject: 'Action needed', by: 'onboarding-agent' });
+    return 1;
+  } catch (e) { console.error('hr alert failed', e && e.message); return 0; }
+}
+
 function hrAddress(st) { return email.addresses(st.replyTo)[0] || ''; }
 
 // A click on a signed link in an email.
@@ -153,6 +177,7 @@ async function confirm(token) {
     const res = checkins.record(cand, setup, p.k, value, o.item.to === 'candidate' ? 'candidate (email)' : o.item.to + ' (email)');
     msg = res.flagged ? `Thank you. Your answer "${value}" has been sent to HR, who will follow up.` : `Thank you, your answer "${value}" is recorded.`;
   } else return page('Unknown action.', false);
+  await alertHandovers(store, p.c, cand);
   await store.put('candidates', p.c, cand, SYSTEM);
   return page(msg, true);
 }
@@ -169,9 +194,9 @@ async function saveSettings(p, user) {
   const client = str(p && p.client, 60).replace(/[^\w-]/g, '');
   if (!client) return { status: 400, body: { error: 'client_required' } };
   const rec = await store.get('journeys', client);
-  const data = Object.assign({}, rec && rec.data, { client, email: { replyTo: email.addresses(p.replyTo).join(', '), cc: email.addresses(p.cc).join(', '), mirror: p.mirror !== false }, updated: nowIso() });
+  const data = Object.assign({}, rec && rec.data, { client, email: { replyTo: email.addresses(p.replyTo).join(', '), cc: email.addresses(p.cc).join(', '), mirror: p.mirror !== false, alertManager: Boolean(p.alertManager) }, updated: nowIso() });
   await store.put('journeys', client, data, user);
   return { status: 200, body: { email: data.email, configured: email.emailConfigured(), sender: process.env.ACS_SENDER || '' } };
 }
 
-module.exports = { toCandidate, ownerTask, candidateEmail, auto, confirm, settings, saveSettings, hrAddress };
+module.exports = { alertHandovers, toCandidate, ownerTask, candidateEmail, auto, confirm, settings, saveSettings, hrAddress };

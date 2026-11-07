@@ -199,20 +199,14 @@ async function runCandidate(store, id, cand, plans, realNow = Date.now()) {
     }
   }
   if (sends) cand.lastMessageAt = new Date().toISOString();
+  await notify.alertHandovers(store, id, cand); // any new red item → email HR
   return sends;
 }
 
 // Delivers one check-in (WhatsApp, email, or an escalation to HR). Returns the number of sends.
-async function sendCheckin(store, id, cand, c, by, ctx) {
+async function sendCheckin(store, id, cand, c, by) {
   let n = 0;
-  if (c.escalate) {
-    const hr = ctx.hrEmail;
-    if (hr) {
-      const ok = await notify.auto(store, id, cand, { to: hr, kind: 'checkin-escalation', k: c.key, subject: `No answer: ${c.item.title} · ${cand.name || ''}`, text: `"${c.item.title}" for ${cand.name || 'the new joiner'} has not been answered after a reminder. It is flagged in the Candidate journey.` });
-      if (ok) n++;
-    }
-    return n;
-  }
+  if (c.escalate) return 0; // the new red item is emailed to HR by notify.alertHandovers
   if (c.wa) { await deliver(store, id, cand, c.wa, by, c.item.title, 'checkin', Boolean(c.email)); n++; }
   if (c.email) {
     const ok = await notify.auto(store, id, cand, Object.assign({ kind: 'checkin', k: c.key }, c.email));
@@ -345,6 +339,7 @@ async function checkinAction(action, p, user) {
   if (action === 'answer') {
     const setup = await setupFor(store, cand.profile && cand.profile.client);
     const r = checkins.record(cand, setup, str(p.key, 80), str(p.value, 300), user.name);
+    await notify.alertHandovers(store, candidateId, cand);
     await store.put('candidates', candidateId, cand, user);
     return { status: 200, body: { flagged: r.flagged, checkins: cand.checkins } };
   }
@@ -359,6 +354,7 @@ async function checkinAction(action, p, user) {
     if (c.wa && !wa.waConfigured()) return { status: 503, body: { error: 'whatsapp_not_configured' } };
     const before = (cand.emails || []).length;
     const n = await sendCheckin(store, candidateId, cand, c, user, ctx);
+    await notify.alertHandovers(store, candidateId, cand);
     cand.lastMessageAt = new Date().toISOString();
     await store.put('candidates', candidateId, cand, user);
     return { status: 200, body: { sent: n, emailed: (cand.emails || []).length > before, held: Boolean(cand.induction && cand.induction.waiting && cand.induction.waiting.length) } };
