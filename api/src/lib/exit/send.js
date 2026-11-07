@@ -184,7 +184,9 @@ async function sendStep(store, setup, k, key, by) {
   const s = (k.plan || []).find(x => x.key === key);
   if (!s) return { ok: false, error: 'step_not_found' };
   const def = (setup.steps || []).find(x => x.key === key) || {};
-  const text = R.fill(def.text || s.title, k, setup);
+  let text = R.fill(def.text || s.title, k, setup);
+  if (s.to === 'employee' && key === 'interview') { const q1 = require('./employee').interviewStart(setup, k); if (q1) text += '\n\n' + q1; }
+  if (s.to === 'employee' && key === 'alumni') k.alumni = { status: 'asked', at: nowIso() };
   const wantWa = s.channel === 'whatsapp' || s.channel === 'both';
   const wantMail = s.channel === 'email' || s.channel === 'both';
   const notes = [];
@@ -258,8 +260,61 @@ async function runDue(store, setup, k, by, realNow = Date.now(), { force = false
   return sent;
 }
 
+/* ---------------- approval outcomes, HR decisions, reminders, escalation ---------------- */
+function finish(setup, k, a, ok, how, by) {
+  a.status = ok ? 'Approved' : 'Rejected'; a.at = nowIso();
+  if (ok) {
+    if (a.action === 'Accept resignation' || a.action === 'Involuntary separation') { k.acceptedAt = k.acceptedAt || nowIso(); k.stage = 'accepted'; }
+    log(k, `${a.action}: ${how}.`, by);
+    return;
+  }
+  alert(k, `${a.action} was ${how}. Speak to the employee and the approver.`);
+  if (a.action === 'Notice waiver' && k.noticeLwd) { k.lwd = k.noticeLwd; k.waiverDays = 0; k.plan = R.planFor(setup, k, k.plan); log(k, `Last working day back to ${R.niceDate(k.lwd)} as per notice.`, by); }
+}
+
+// HR records the decision for the whole approval (e.g. given on a call).
+function decide(setup, k, approvalId, yes, note, by) {
+  const a = (k.approvals || []).find(x => x.id === approvalId);
+  if (!a || a.status !== 'Pending') return false;
+  a.chain.forEach(s => { if (s.status !== 'Approved') { s.status = yes ? 'Approved' : 'Rejected'; s.at = nowIso(); s.byHr = by.name; } });
+  a.note = String(note || '').slice(0, 300);
+  finish(setup, k, a, yes, `${yes ? 'approved' : 'rejected'} by HR (${by.name})${a.note ? ': ' + a.note : ''}`, by);
+  return true;
+}
+
+// Asks the current approvers again (fresh email).
+async function remind(setup, k, approvalId, by) {
+  const a = (k.approvals || []).find(x => x.id === approvalId);
+  if (!a || a.status !== 'Pending') return [];
+  a.chain.forEach(s => { if (s.status === 'Asked') s.status = 'Waiting'; });
+  return askApprovers(setup, k, by);
+}
+
+// Past the reply time: the rule's delegate is asked once for the same step, and HR is told.
+async function escalate(setup, k, now = Date.now()) {
+  let n = 0;
+  for (const a of k.approvals || []) {
+    if (a.status !== 'Pending') continue;
+    for (let i = 0; i < a.chain.length; i++) {
+      const s = a.chain[i];
+      if (s.status !== 'Asked' || s.escalatedAt || !s.askedAt || now - Date.parse(s.askedAt) < (+a.sla || 48) * 3600e3) continue;
+      s.escalatedAt = nowIso(); n++;
+      const del = a.delegate ? roleContact(setup, k, a.delegate) : null;
+      let how = 'no delegate email';
+      if (del && del.email) {
+        const r = await mail(setup, k, { to: del.email, subject: `Approval needed (no reply from ${s.person || s.role}): ${a.action}, ${k.employee.name}`,
+          text: `${s.person || s.role} has not answered within ${a.sla} hours. As the delegate, please decide.\n\n${a.action} for ${k.employee.name}. Last working day: ${R.niceDate(k.lwd)}.`,
+          buttons: [{ label: 'Approve', url: link(k, { a: 'ap', i: a.id, s: i, v: 'yes' }) }, { label: 'Reject', url: link(k, { a: 'ap', i: a.id, s: i, v: 'no' }), secondary: true }] });
+        how = r.ok ? `${a.delegate} asked` : r.note;
+      }
+      alert(k, `${a.action}: no reply from ${s.person || s.role} in ${a.sla} hours (${how}).`);
+      log(k, `${a.action}: escalated after ${a.sla} hours (${how}).`, { name: 'exit-agent' });
+    }
+  }
+  return n;
+}
+
 /* ---------------- one-click links (m: 'exit') ---------------- */
-function replan(setup, k) { k.plan = R.planFor(setup, k, k.plan); }
 
 async function onLink(store, setup, k, p) {
   if (k.status !== 'open') return { ok: false, msg: 'This exit case is closed.' };
@@ -272,16 +327,11 @@ async function onLink(store, setup, k, p) {
     s.status = p.v === 'yes' ? 'Approved' : 'Rejected'; s.at = nowIso();
     log(k, `${a.action}: ${s.status.toLowerCase()} by ${s.person || s.role} (email).`, by);
     if (p.v !== 'yes') {
-      a.status = 'Rejected';
-      alert(k, `${a.action} was rejected by ${s.person || s.role}. Speak to the employee and the approver.`);
-      if (a.action === 'Notice waiver' && k.noticeLwd) { k.lwd = k.noticeLwd; k.waiverDays = 0; replan(setup, k); log(k, `Last working day back to ${R.niceDate(k.lwd)} as per notice.`, by); }
+      finish(setup, k, a, false, `rejected by ${s.person || s.role}`, by);
       return { ok: true, msg: 'Thank you. Your answer is recorded and HR has been told.' };
     }
-    if (a.chain.every(x => x.status === 'Approved')) {
-      a.status = 'Approved'; a.at = nowIso();
-      if (a.action === 'Accept resignation' || a.action === 'Involuntary separation') { k.acceptedAt = k.acceptedAt || nowIso(); k.stage = 'accepted'; }
-      log(k, `${a.action}: fully approved.`, by);
-    } else await askApprovers(setup, k, by);
+    if (a.chain.every(x => x.status === 'Approved')) finish(setup, k, a, true, 'fully approved', by);
+    else await askApprovers(setup, k, by);
     return { ok: true, msg: 'Thank you. Your approval is recorded.' };
   }
   if (p.a === 'clr') {
@@ -311,4 +361,4 @@ async function onLink(store, setup, k, p) {
   return { ok: false, msg: 'Unknown action.' };
 }
 
-module.exports = { sendLetters, allCleared, sendStep, runDue, replayHeld, askApprovers, onLink, caseNow, stepTime, inQuietHours, windowClosed, alert, log };
+module.exports = { decide, remind, escalate, sendLetters, allCleared, sendStep, runDue, replayHeld, askApprovers, onLink, caseNow, stepTime, inQuietHours, windowClosed, alert, log };

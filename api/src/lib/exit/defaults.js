@@ -22,6 +22,7 @@ const START = { first: 'First conversation with manager', formal: 'Formal resign
 const CHANNELS = ['whatsapp', 'email', 'both'];
 const RECIPIENTS = ['employee', 'manager', 'approvers', 'owners', 'hr', 'payroll', 'recruitment'];
 const ANCHORS = { first: 'First told manager', formal: 'Formal date', lwd: 'Last working day' };
+const QTYPES = { scale5: 'Rating 1-5', scale10: 'Rating 0-10', choice: 'Choice (options)', yesno: 'Yes / Maybe / No', open: 'Open answer' };
 const WHEN = { all: 'All separation types', voluntary: 'Voluntary only', notice: 'Types that serve notice', notdeath: 'All except death in service', interview: 'Types with an exit interview', alumni: 'Types invited to alumni' };
 
 const TYPES = [
@@ -123,11 +124,18 @@ function tcmplDefault() {
     people: PEOPLE,
     contacts: { company: '', hr: '', payroll: '', recruitment: '', replyTo: '', cc: '' },
     fnf: { approver: 'Client HR', wageDays: 2, gratYears: 5, fteGratYears: 1, gratDays: 30, gratCap: 2000000, encash: 'basic26', recovery: 'basic' },
-    interview: { threshold: 5 },
+    interview: { threshold: 5, questions: [
+      { id: 'q1', q: 'Overall, how was your experience working here?', type: 'scale5', options: '' },
+      { id: 'q2', q: 'What is the main reason you are leaving?', type: 'choice', options: 'Career growth, Compensation, Manager, Work-life balance, Relocation, Higher studies, Personal, Other' },
+      { id: 'q3', q: 'How supported did you feel by your manager?', type: 'scale5', options: '' },
+      { id: 'q4', q: 'What could we have done to keep you?', type: 'open', options: '' },
+      { id: 'q5', q: 'How likely are you to recommend us as a place to work?', type: 'scale10', options: '' },
+      { id: 'q6', q: 'Would you consider coming back in future?', type: 'yesno', options: '' }
+    ] },
     alumni: { on: true, exclude: 'Misconduct exits' },
     sending: { auto: false }, // off: HR sends each step from Case journey; on: due steps go out by themselves (8 am - 9 pm IST)
     steps: STEPS
   }));
 }
 
-module.exports = { tcmplDefault, STAGES, CATEGORIES, NOTICE, ANNOUNCE, TELL_TA, REPLACE, RAISERS, START, CHANNELS, RECIPIENTS, ANCHORS, WHEN };
+module.exports = { QTYPES, tcmplDefault, STAGES, CATEGORIES, NOTICE, ANNOUNCE, TELL_TA, REPLACE, RAISERS, START, CHANNELS, RECIPIENTS, ANCHORS, WHEN };

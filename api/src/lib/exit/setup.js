@@ -64,7 +64,13 @@ function cleanSetup(s) {
   const f = Object.assign({}, d.fnf, s.fnf);
   out.fnf = { approver: str(f.approver, 60) || 'Client HR', wageDays: num(f.wageDays, 0, 60, 2), gratYears: num(f.gratYears, 0, 10, 5), fteGratYears: num(f.fteGratYears, 0, 10, 1), gratDays: num(f.gratDays, 0, 90, 30),
     gratCap: num(f.gratCap, 0, 1e8, 2000000), encash: oneOf(f.encash, ['basic26', 'gross30'], 'basic26'), recovery: oneOf(f.recovery, ['basic', 'gross'], 'basic') };
-  out.interview = { threshold: num((s.interview || d.interview).threshold, 1, 50, 5) };
+  const iv = s.interview || d.interview;
+  out.interview = { threshold: num(iv.threshold, 1, 50, 5), questions: list(iv.questions || d.interview.questions, 20, (q, i) => {
+    const text = str(q.q, 300); if (!text) return null;
+    const type = oneOf(q.type, Object.keys(D.QTYPES), 'open');
+    const options = str(q.options, 400);
+    return { id: slug(q.id) || 'q' + (i + 1), q: text, type: type === 'choice' && !options ? 'open' : type, options };
+  }) };
   const al = Object.assign({}, d.alumni, s.alumni);
   out.alumni = { on: al.on !== undefined ? bool(al.on) : true, exclude: str(al.exclude, 120) };
   out.sending = { auto: bool((s.sending || {}).auto) };
@@ -108,7 +114,7 @@ async function reset(store, client, user) {
 // Lists the screens need for dropdowns.
 function options() {
   return { stages: D.STAGES, categories: D.CATEGORIES, notice: D.NOTICE, announce: D.ANNOUNCE, ta: D.TELL_TA, replace: D.REPLACE, raisers: D.RAISERS,
-    start: D.START, channels: D.CHANNELS, recipients: D.RECIPIENTS, anchors: D.ANCHORS, when: D.WHEN };
+    start: D.START, qtypes: D.QTYPES, channels: D.CHANNELS, recipients: D.RECIPIENTS, anchors: D.ANCHORS, when: D.WHEN };
 }
 
 module.exports = { cleanSetup, load, save, reset, options, cleanClient, str };

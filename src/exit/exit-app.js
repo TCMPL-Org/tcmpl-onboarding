@@ -14,10 +14,7 @@ const TABS = [
   ['interviews', '5 · Interviews and alumni'], ['dashboard', '6 · HR dashboard'], ['attrition', '7 · Attrition analysis'], ['setup', '8 · Exit setup']
 ];
 const LATER = {
-  approvals: ['Every approval request across cases, worked out from level, department, separation type and amount.', 'Approvers answer by one-click email links; reminders after the SLA, then the delegate is asked.', 'A "Who approves?" tester for any combination.'],
-  interviews: ['Exit interview on WhatsApp in the employee\'s language.', 'Anonymous reports: groups smaller than the threshold in Exit setup are hidden.', 'Alumni opt-in on the last day (consent recorded) and job sharing.'],
-  dashboard: ['Open cases, exits per month, attrition by department and manager hotspots.', 'Everything read from this client\'s exit cases only.'],
-  attrition: ['Cost of attrition, early warning, cohorts and tenure, regretted loss.', 'Any sample data is clearly marked.']
+  attrition: ['Attrition rate, cost of attrition and early warning need the headcount and pay of everyone who stays, so they come with the HRMS headcount feed.', 'Tenure at exit, exits per month and by department are already on the HR dashboard.']
 };
 
 let root = null, ctx = null, tab = 'desk', setupRec = null, cases = [], curId = '', previewT = null, importRows = [];
@@ -84,6 +81,9 @@ function show(k) {
   if (k === 'desk') renderDesk();
   if (k === 'journey') renderJourney();
   if (k === 'clear') renderClear();
+  if (k === 'approvals') renderApprovals();
+  if (k === 'interviews') renderInterviews();
+  if (k === 'dashboard') renderDashboard();
   if (k === 'setup') renderSetup();
 }
 
@@ -243,6 +243,7 @@ async function doImport() {
 }
 
 function stageLabel(k) {
+  if (k.status === 'intent') return 'Thinking of leaving (private)';
   if (k.status === 'cancelled') return 'Cancelled';
   if (k.status === 'closed') return 'Closed';
   const st = (setupRec && setupRec.options.stages) || [];
@@ -253,7 +254,7 @@ function stageLabel(k) {
 function renderCases() {
   const t = $('#exCases'); if (!t) return;
   const all = $('#exShowAll') && $('#exShowAll').checked;
-  const list = cases.filter(k => all || k.status === 'open');
+  const list = cases.filter(k => all || k.status === 'open' || k.status === 'intent');
   t.innerHTML = list.length ? `<tr><th>Employee</th><th>Type</th><th>Raised</th><th>Last day</th><th>Stage</th><th>Next step</th><th></th></tr>` + list.map(k => `<tr data-id="${esc(k.id)}" class="ex-click">
       <td><b>${esc(k.name)}</b><div class="note">${esc([k.code, k.designation, k.dept, k.level].filter(Boolean).join(' · '))}</div></td>
       <td>${esc(k.typeName)}<div class="note">by ${esc(k.raisedBy)} · ${esc(k.source)}</div></td><td>${fmtD(k.formal)}</td>
@@ -333,6 +334,10 @@ function drawCase(data) {
         <dt>Clearances</dt><dd>${owners.map(o => { const c = clr[o.id] || {}; return `<span class="chip${c.status === 'cleared' ? ' ex-green' : c.status === 'issue' ? ' ex-red' : ''}" title="${esc(o.items)}">${esc(o.area)}: ${esc(c.status === 'cleared' ? 'cleared' : c.status === 'issue' ? 'pending item' : c.askedAt ? 'asked' : 'not started')}</span>`; }).join(' ')}</dd>
         <dt>Announcement</dt><dd>${esc(k.announce)}</dd><dt>Recruitment</dt><dd>${esc(k.ta)} · ${esc(k.replace)}</dd>
         ${k.reason ? `<dt>Reason</dt><dd>${esc(k.reason)}</dd>` : ''}
+        <dt>Assets declared</dt><dd>${(k.assets || []).length ? k.assets.map((a, i) => `<div>${esc(a.caption || 'Item ' + a.n)} <span class="note">${fmtDT(a.at)}</span>${a.path ? ` <button class="btn small" type="button" data-asset="${i}">View</button>` : a.error ? ` <span class="note">(${esc(a.error)})</span>` : ''}</div>`).join('') : k.assetsDone ? 'None (employee said so)' : '<span class="note">none yet; the employee sends photos on WhatsApp</span>'}${k.assetsDone && (k.assets || []).length ? '<div class="note">employee said that is everything</div>' : ''}</dd>
+        <dt>Exit interview</dt><dd>${k.interview ? (k.interview.status === 'done' ? 'Completed' : `In progress (question ${k.interview.i + 1})`) : '<span class="note">not started</span>'}</dd>
+        <dt>Alumni</dt><dd>${k.alumni ? esc({ asked: 'Invited', joined: 'Joined', declined: 'Declined' }[k.alumni.status] || k.alumni.status) : '<span class="note">not invited</span>'}</dd>
+        ${k.status === 'intent' ? `<dt>Private conversation</dt><dd>${esc({ menu: 'Choosing how to go ahead', told: 'Asked when the manager was told', lwd: 'Asked about the last day', hr: 'Waiting for a confidential HR call' }[k.intent.step] || k.intent.step)}<div class="note">First message: "${esc(k.intent.firstText || '')}"</div></dd>` : ''}
         <dt>Status</dt><dd>${esc(k.status)}${(k.held || []).length ? ` · ${k.held.length} WhatsApp message${k.held.length > 1 ? 's' : ''} waiting for the employee to write` : ''}</dd></dl>
         ${isOpen ? '<div class="row" style="margin-top:10px"><button class="btn small" id="exCancel" type="button">Cancel this case</button></div>' : ''}</div>
       <div class="card" style="margin-top:16px"><h3>WhatsApp with ${esc((e.name || '').split(' ')[0] || 'the employee')}</h3>
@@ -349,6 +354,13 @@ function drawCase(data) {
     const c = await post('case', { id: k.id });
     if (c.ok) drawCase(c.body);
   };
+  $$('#exCase [data-asset]').forEach(b => { b.onclick = async () => {
+    const x = await post('asset', { id: k.id, index: Number(b.dataset.asset) });
+    if (!x.ok) { toast('The file could not be opened.'); return; }
+    const bin = atob(x.body.base64), bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    window.open(URL.createObjectURL(new Blob([bytes], { type: x.body.mime })), '_blank', 'noopener');
+  }; });
   $$('#exCase [data-close]').forEach(b => { b.onclick = () => busy(b, async () => after(await post('alert-close', { id: k.id, index: Number(b.dataset.close) }))); });
   $$('#exCase [data-send]').forEach(b => { b.onclick = () => busy(b, async () => { const x = await post('send', { id: k.id, key: b.dataset.send }); await after(x, x.ok ? `${x.body.result.status === 'sent' ? 'Sent' : x.body.result.status === 'held' ? 'Held until the employee writes' : 'Not sent'}: ${(x.body.result.notes || []).join(' · ')}` : ''); }); });
   $$('#exCase [data-mark]').forEach(b => { b.onclick = () => busy(b, async () => after(await post('step', { id: k.id, key: b.dataset.mark, status: b.dataset.v }))); });
@@ -365,6 +377,122 @@ function drawCase(data) {
     const x = await post('cancel', { id: k.id, reason: why });
     if (x.ok) { toast('Case cancelled.'); await loadCases(); renderJourney(); } else toast('Not cancelled.');
   };
+}
+
+/* ---------------- 3 · Approvals ---------------- */
+async function renderApprovals() {
+  const sec = $('#ex-approvals');
+  const actions = [...new Set(((setupRec && setupRec.setup.approvals) || []).map(a => a.action))];
+  sec.innerHTML = `<div class="intro"><div><h2>Approvals</h2><p>Every approval waiting across ${esc(ctx.clientLabel())}'s cases. Approvers answer with one click in their email; after the reply time the rule's delegate is asked and HR is told. HR can remind, or record a decision given on a call.</p></div></div>
+    <div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Waiting for a decision</h3><button class="btn small" id="exApRefresh" type="button">Refresh</button></div><div id="exApList" class="note" style="margin-top:8px">Loading…</div></div>
+    <div class="card" style="margin-top:16px"><h3>Who approves?</h3><p class="note">Test any combination against this client's rules in Exit setup.</p>
+      <div class="ex-form"><label>Request<select id="exWhoAct">${actions.map(a => `<option>${esc(a)}</option>`).join('')}</select></label>
+        <label>Level<input type="text" id="exWhoLvl" placeholder="L3"></label><label>Department<input type="text" id="exWhoDept" placeholder="Sales"></label>
+        <label>Separation type<select id="exWhoType"><option value="Any">Any</option>${((setupRec && setupRec.setup.types) || []).map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}</select></label>
+        <label>Amount (₹, for recoveries)<input type="number" id="exWhoAmt" value="0"></label></div>
+      <div id="exWhoOut" class="note" style="margin-top:8px"></div></div>`;
+  $('#exApRefresh').onclick = loadApprovals;
+  const who = async () => {
+    const r = await post('who', { client: client(), action: $('#exWhoAct').value, level: $('#exWhoLvl').value, dept: $('#exWhoDept').value, typeId: $('#exWhoType').value, amount: Number($('#exWhoAmt').value) });
+    if (!r.ok) return;
+    $('#exWhoOut').innerHTML = r.body.rule ? `<b>${r.body.chain.map(s => esc(s.person && s.person !== s.role ? `${s.person} (${s.role})` : s.role)).join(r.body.rule.mode === 'Parallel' ? ' + ' : ' → ')}</b> · reply within ${r.body.rule.sla} h, then ${esc(r.body.rule.delegate || 'HR')} is asked <span class="note">(rule: ${esc([r.body.rule.level, r.body.rule.dept, r.body.rule.type].join(' · '))}${r.body.rule.over ? ', over ₹' + r.body.rule.over : ''})</span>` : 'No rule matches: HR decides.';
+  };
+  ['#exWhoAct', '#exWhoLvl', '#exWhoDept', '#exWhoType', '#exWhoAmt'].forEach(q => $(q).addEventListener('input', who));
+  who();
+  loadApprovals();
+}
+
+async function loadApprovals() {
+  const box = $('#exApList'); if (!box) return;
+  const r = await post('approvals', { client: client() });
+  if (!r.ok) { box.textContent = 'Could not load.'; return; }
+  const items = r.body.items || [];
+  box.classList.toggle('note', !items.length);
+  box.innerHTML = items.length ? `<div class="tscroll"><table class="ex-tbl"><tr><th>Employee</th><th>Request</th><th>Chain</th><th>Waiting since</th><th></th></tr>${items.map(x => `<tr>
+      <td><b>${esc(x.name)}</b><div class="note">${esc(x.typeName)} · last day ${fmtD(x.lwd)}${x.waiverDays ? ` · ${x.waiverDays} days' waiver` : ''}</div></td>
+      <td>${esc(x.action)}</td>
+      <td>${x.chain.map(s => `${esc(s.person && s.person !== s.role ? s.person : s.role)} <span class="chip${s.status === 'Approved' ? ' ex-green' : s.status === 'Asked' ? ' ex-amber' : ''}">${esc(s.status)}</span>`).join(x.mode === 'Parallel' ? ' + ' : ' → ')}</td>
+      <td>${x.notAsked ? '<span class="note">not asked yet (send "Ask the approvers" in Case journey)</span>' : fmtDT(x.since)}${x.overdue ? ' <span class="chip ex-red">overdue</span>' : ''}</td>
+      <td><div class="ex-stepbtns"><button class="btn small" type="button" data-rem="${esc(x.approvalId)}" data-c="${esc(x.caseId)}">Remind</button><button class="btn small" type="button" data-dec="yes" data-a="${esc(x.approvalId)}" data-c="${esc(x.caseId)}">Approve</button><button class="btn small" type="button" data-dec="no" data-a="${esc(x.approvalId)}" data-c="${esc(x.caseId)}">Reject</button><button class="btn small" type="button" data-open="${esc(x.caseId)}">Open case</button></div></td></tr>`).join('')}</table></div>` : 'Nothing is waiting for approval.';
+  $$('#exApList [data-rem]').forEach(b => { b.onclick = async () => { b.disabled = true; const x = await post('approval-remind', { id: b.dataset.c, approvalId: b.dataset.rem }); toast(x.ok ? ((x.body.notes || []).join(' · ') || 'Reminded.') : 'Not sent.'); loadApprovals(); }; });
+  $$('#exApList [data-dec]').forEach(b => { b.onclick = async () => {
+    const note = window.prompt(b.dataset.dec === 'yes' ? 'Approve on behalf of the approvers. Note (e.g. "approved by Priya on call"):' : 'Reject. Reason:');
+    if (note === null) return;
+    const x = await post('approval-decide', { id: b.dataset.c, approvalId: b.dataset.a, decision: b.dataset.dec, note });
+    toast(x.ok ? 'Decision recorded.' : 'Not recorded.'); await loadCases(); loadApprovals();
+  }; });
+  $$('#exApList [data-open]').forEach(b => { b.onclick = () => { curId = b.dataset.open; show('journey'); }; });
+}
+
+/* ---------------- 5 · Interviews and alumni ---------------- */
+async function renderInterviews() {
+  const sec = $('#ex-interviews');
+  sec.innerHTML = `<div class="intro"><div><h2>Exit interviews and alumni</h2><p>Interviews run on WhatsApp, one question at a time. Reports are anonymous: any group smaller than the minimum in Exit setup is hidden.</p></div></div>
+    <div class="card"><div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px"><h3 style="margin:0">What leavers say</h3>
+      <label class="note">Group by <select id="exIvBy"><option value="dept">Department</option><option value="manager">Manager</option><option value="location">Location</option><option value="level">Level</option><option value="category">Category</option></select></label></div>
+      <div id="exIvOut" class="note" style="margin-top:8px">Loading…</div></div>
+    <div class="ex-grid" style="margin-top:16px">
+      <div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Alumni network</h3><button class="btn small" id="exAlCsv" type="button">Download CSV</button></div><div id="exAlList" class="note" style="margin-top:8px">Loading…</div></div>
+      <div class="card"><h3>Share a job with alumni</h3><div class="ex-form"><label>Role<input type="text" id="exJobRole" placeholder="Area Sales Manager"></label><label>Location<input type="text" id="exJobLoc" placeholder="Pune"></label><label class="ex-wide">Link or details<input type="text" id="exJobLink" placeholder="https://…"></label></div>
+        <div class="row" style="margin-top:8px"><button class="btn small primary" id="exJobSend" type="button">Send to alumni</button><span class="note" id="exJobState">By email. WhatsApp needs an approved template (WHATSAPP_ALUMNI_TEMPLATE).</span></div></div></div>`;
+  $('#exIvBy').onchange = loadInterviews;
+  $('#exJobSend').onclick = async () => {
+    const role = $('#exJobRole').value.trim(); if (!role) { toast('Add the role.'); return; }
+    const r = await post('alumni-share', { client: client(), role, location: $('#exJobLoc').value, link: $('#exJobLink').value });
+    $('#exJobState').textContent = r.ok ? `Sent to ${r.body.emails} of ${r.body.alumni} alumni by email${r.body.whatsappTemplate ? `, ${r.body.whatsapps} on WhatsApp` : ''}.` : 'Not sent.';
+  };
+  loadInterviews();
+  const a = await post('alumni', { client: client() });
+  const list = a.ok ? a.body.items || [] : [];
+  $('#exAlList').classList.toggle('note', !list.length);
+  $('#exAlList').innerHTML = list.length ? `<table class="ex-tbl"><tr><th>Name</th><th>Role</th><th>Left</th><th>Joined</th></tr>${list.map(x => `<tr><td>${esc(x.name)}<div class="note">${esc(x.email || '')}</div></td><td>${esc([x.designation, x.dept].filter(Boolean).join(', '))}</td><td>${fmtD(x.lwd)}</td><td class="note">${fmtD((x.joinedAt || '').slice(0, 10))}</td></tr>`).join('')}</table>` : 'No alumni yet. Leavers are invited with the "Alumni invitation" step and join by replying YES.';
+  $('#exAlCsv').onclick = () => download(`Alumni_${client()}.csv`, toCsv([['Name', 'Mobile', 'Email', 'Designation', 'Department', 'Location', 'Last working day', 'Joined', 'Consent']].concat(list.map(x => [x.name, x.phone, x.email, x.designation, x.dept, x.location, x.lwd, x.joinedAt, x.consent]))));
+}
+
+async function loadInterviews() {
+  const r = await post('interviews', { client: client(), groupBy: $('#exIvBy').value });
+  const box = $('#exIvOut'); if (!r.ok || !box) return;
+  const d = r.body;
+  if (!d.total) { box.textContent = 'No exit interviews completed yet.'; return; }
+  const qs = d.questions || [];
+  const cell = (q, v) => v == null ? '–' : Array.isArray(v) ? v.map(([k, n]) => `${esc(k)} (${n})`).join(', ') : q.type === 'open' ? `${v} answers` : esc(v);
+  box.classList.toggle('note', !d.groups.length);
+  box.innerHTML = (d.groups.length ? `<div class="tscroll"><table class="ex-tbl"><tr><th>${esc({ dept: 'Department', manager: 'Manager', location: 'Location', level: 'Level', category: 'Category' }[d.groupBy])}</th><th>People</th>${qs.map(q => `<th title="${esc(q.q)}">${esc(q.q.length > 34 ? q.q.slice(0, 32) + '…' : q.q)}</th>`).join('')}</tr>
+      ${d.groups.map(g => `<tr><td><b>${esc(g.group)}</b></td><td>${g.n}</td>${qs.map(q => `<td>${cell(q, g.answers[q.id])}</td>`).join('')}</tr>`).join('')}</table></div>` : '')
+    + `<p class="note">${d.total} interview${d.total > 1 ? 's' : ''} in all.${d.hiddenGroups ? ` ${d.hiddenGroups} group${d.hiddenGroups > 1 ? 's' : ''} (${d.hiddenPeople} people) hidden: fewer than ${d.threshold} people.` : ''} Ratings are averages.</p>`;
+}
+
+/* ---------------- 6 · HR dashboard ---------------- */
+function bars(rows, opts = {}) {
+  if (!rows.length) return '<p class="note">No data yet.</p>';
+  const max = Math.max(1, ...rows.map(r => r[1]));
+  return `<div class="ex-bars">${rows.map(([l, v]) => `<div class="ex-bar"><span class="ex-bl" title="${esc(l)}">${esc(opts.label ? opts.label(l) : l)}</span><span class="ex-bt"><span style="width:${Math.round(100 * v / max)}%"></span></span><span class="ex-bv">${v}</span></div>`).join('')}</div>`;
+}
+
+async function renderDashboard() {
+  const sec = $('#ex-dashboard');
+  const months = (sec.querySelector('#exDashM') || {}).value || '12';
+  sec.innerHTML = `<div class="intro"><div><h2>HR dashboard</h2><p>${esc(ctx.clientLabel())}'s exits, read from its exit cases and interviews only. Interview figures appear once a group reaches the minimum size.</p></div>
+    <div class="row"><select id="exDashM">${[['3', 'Last 3 months'], ['6', 'Last 6 months'], ['12', 'Last 12 months'], ['24', 'Last 24 months']].map(([v, l]) => `<option value="${v}" ${v === months ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div><div id="exDash" class="note">Loading…</div>`;
+  $('#exDashM').onchange = renderDashboard;
+  const r = await post('dashboard', { client: client(), months: Number(months) });
+  if (!r.ok) { $('#exDash').textContent = 'Could not load.'; return; }
+  const d = r.body, t = d.tiles, iv = d.interviews;
+  const tile = (v, l, warn) => `<div class="ex-tile${warn ? ' ex-warn' : ''}"><b>${v == null ? '–' : v}</b><span>${esc(l)}</span></div>`;
+  $('#exDash').classList.remove('note');
+  $('#exDash').innerHTML = `<div class="ex-tiles">${tile(t.open, 'Open cases')}${tile(t.leaving30, 'Leaving in the next 30 days')}${tile(t.exits, 'Exits in the period')}${tile(t.voluntaryPct + '%', 'Voluntary')}
+      ${tile(t.pendingApprovals, 'Approvals waiting', t.pendingApprovals > 0)}${tile(t.red, 'Items needing HR', t.red > 0)}${tile(t.fnfOnTimePct == null ? null : t.fnfOnTimePct + '%', 'F&F wages paid on time', t.fnfOnTimePct != null && t.fnfOnTimePct < 100)}
+      ${tile(t.thinking, 'Thinking of leaving (private)', t.thinking > 0)}${tile(t.interviews, 'Exit interviews')}${tile(t.alumni, 'Alumni')}</div>
+    <div class="ex-grid" style="margin-top:16px">
+      <div class="card"><h3>Exits per month (by last working day)</h3>${bars(d.perMonth, { label: m => { const [y, mo] = m.split('-'); return MON[+mo - 1] + ' ' + y.slice(2); } })}</div>
+      <div class="card"><h3>By department</h3>${bars(d.byDept)}</div>
+      <div class="card"><h3>By separation type</h3>${bars(d.byType)}</div>
+      <div class="card"><h3>Tenure at exit</h3>${bars(d.byTenure)}</div>
+      <div class="card"><h3>Managers with 2 or more exits</h3>${bars(d.byManager)}</div>
+      <div class="card"><h3>What leavers say</h3>${iv.n >= iv.threshold ? `<dl class="ex-dl"><dt>Overall experience</dt><dd>${iv.overall ?? '–'} / 5</dd><dt>Manager support</dt><dd>${iv.manager ?? '–'} / 5</dd><dt>Employee NPS</dt><dd>${iv.enps ?? '–'}</dd></dl><h4>Main reasons</h4>${bars(iv.reasons)}` : `<p class="note">${iv.n} interview${iv.n === 1 ? '' : 's'} in the period; figures show from ${iv.threshold}.</p>`}</div>
+    </div>
+    <div class="card" style="margin-top:16px"><h3>Open cases: what could go wrong</h3>${d.risks.length ? `<table class="ex-tbl"><tr><th>Employee</th><th>Last day</th><th>Needs HR</th><th>Approvals waiting</th></tr>${d.risks.map(x => `<tr class="ex-click" data-open="${esc(x.id)}"><td>${esc(x.name)}</td><td>${fmtD(x.lwd)}</td><td>${x.items || ''}</td><td>${esc(x.pending.join(', '))}</td></tr>`).join('')}</table>` : '<p class="note">Nothing at risk right now.</p>'}</div>`;
+  $$('#exDash [data-open]').forEach(tr => { tr.onclick = () => { curId = tr.dataset.open; show('journey'); }; });
 }
 
 /* ---------------- 4 · Clearances and F&F ---------------- */
@@ -471,6 +599,7 @@ const COLS = o => ({
   approvals: [['action', 'Request', 'text', 'w12'], ['level', 'Level', 'text'], ['dept', 'Department', 'text'], ['type', 'Type id (or Any)', 'text'], ['over', 'Amount over (₹)', 'num'], ['chain', 'Approvers (A > B, or A + B)', 'text', 'w14'], ['mode', 'Mode', ['Sequential', 'Parallel']], ['sla', 'Reply within (h)', 'num'], ['delegate', 'If no reply, ask', 'text']],
   people: [['role', 'Role', 'text'], ['contact', 'Person (Name <email>)', 'text', 'w20']],
   owners: [['area', 'Area', 'text'], ['owner', 'Owner', 'text'], ['contact', 'Email (Name <email>)', 'text', 'w16'], ['channel', 'Channel', o.channels], ['sla', 'SLA (h)', 'num'], ['items', 'What they clear', 'text', 'w20']],
+  questions: [['q', 'Question', 'text', 'w20'], ['type', 'Answer', Object.keys(o.qtypes), Object.values(o.qtypes)], ['options', 'Options (Choice only, comma separated)', 'text', 'w16']],
   steps: [['on', 'On', 'chk'], ['stage', 'Stage', o.stages.map(s => s[0]), o.stages.map(s => s[1])], ['title', 'Step', 'text', 'w16'], ['to', 'To', o.recipients], ['channel', 'Channel', o.channels], ['anchor', 'Counted from', Object.keys(o.anchors), Object.values(o.anchors)], ['day', 'Day', 'num'], ['time', 'Time', 'text', 'w5'], ['when', 'For', Object.keys(o.when), Object.values(o.when)], ['text', 'Message', 'area']]
 });
 
@@ -489,7 +618,7 @@ function table(path, rows, cols) {
     <button class="btn small" type="button" data-add="${path}">+ Add row</button>`;
 }
 
-function getList(path) { return path === 'seg' ? draftSetup.noticeStart.seg : draftSetup[path]; }
+function getList(path) { return path === 'seg' ? draftSetup.noticeStart.seg : path === 'questions' ? draftSetup.interview.questions : draftSetup[path]; }
 
 function renderSetup() {
   const sec = $('#ex-setup');
@@ -514,6 +643,7 @@ function renderSetup() {
     <details class="card ex-det" open><summary>Sending</summary>
       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-g="sending.auto" ${s.sending && s.sending.auto ? 'checked' : ''}> Send due steps by themselves (8 am to 9 pm India time). When off, HR sends each step from Case journey.</label>
       <p class="note" style="margin:6px 0 0">WhatsApp goes only to the employee, and only within 24 hours of their last message; otherwise it waits until they write (email copies go at once). Approvers, owners, payroll and recruitment get email with one-click buttons.</p></details>
+    <details class="card ex-det"><summary>Exit interview questions</summary><p class="note">Asked on WhatsApp one at a time after the "Exit interview" step. Answers are stored for anonymous group reports.</p>${table('questions', s.interview.questions || [], c.questions)}</details>
     <details class="card ex-det"><summary>F&F, interview and alumni</summary><div class="ex-form">
       <label>F&F approver<input type="text" data-g="fnf.approver" value="${esc(s.fnf.approver)}"></label>
       <label>Wages paid within (working days)<input type="number" data-g="fnf.wageDays" value="${esc(s.fnf.wageDays)}" class="ex-num"></label>
@@ -564,6 +694,7 @@ function blankRow(path) {
     approvals: { id: 'a' + n, action: 'Accept resignation', level: 'Any', dept: 'Any', type: 'Any', over: 0, chain: 'Manager', mode: 'Sequential', sla: 48, delegate: 'HR business partner' },
     people: { id: 'p' + n, role: 'New role', contact: '' },
     owners: { id: 'o' + n, area: 'New area', owner: '', contact: '', channel: 'email', sla: 48, items: '' },
+    questions: { id: 'q' + n, q: 'New question', type: 'open', options: '' },
     steps: { key: 'step' + n, on: true, stage: 'raised', title: 'New step', to: 'employee', channel: 'whatsapp', anchor: 'formal', day: 0, time: '11:00', when: 'all', text: '' }
   })[path];
 }

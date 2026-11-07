@@ -12,6 +12,9 @@ const C = require('./cases');
 const R = require('./rules');
 const X = require('./send');
 const F = require('./fnf');
+const E = require('./employee');
+const REP = require('./reports');
+const blob = require('../blob');
 
 const SYSTEM = { name: 'exit-agent' };
 const nowIso = () => new Date().toISOString();
@@ -80,6 +83,17 @@ async function action({ action: name, body, user }) {
       }
       case 'send': case 'step': case 'walk': case 'reply': case 'fnf': case 'fnf-status': case 'letters-send': case 'clearance': return await caseAction(store, name, body, user);
       case 'letter': return await letterFile(store, body);
+      case 'asset': return await assetFile(store, body);
+      case 'approvals': return json(200, { items: await REP.approvals(store, client) });
+      case 'who': { const { setup } = await S.load(store, client); return json(200, REP.who(setup, body)); }
+      case 'dashboard': { const { setup } = await S.load(store, client); return json(200, await REP.dashboard(store, setup, client, Math.max(1, Math.min(24, parseInt(body.months, 10) || 12)))); }
+      case 'interviews': { const { setup } = await S.load(store, client); return json(200, await REP.interviews(store, setup, client, String(body.groupBy || 'dept'))); }
+      case 'alumni': return json(200, { items: await REP.alumni(store, client) });
+      case 'alumni-share': {
+        if (!await modules.enabled(store, client, 'exit')) return json(403, { error: 'exit_off_for_client' });
+        const { setup } = await S.load(store, client); const r = await REP.shareJob(store, setup, client, body); return json(r.status, r.body);
+      }
+      case 'approval-decide': case 'approval-remind': return await caseAction(store, name, body, user);
       default: return json(404, { error: 'unknown_action' });
     }
   } catch (e) {
@@ -133,6 +147,10 @@ async function caseAction(store, name, body, user) {
     if (!o || !['open', 'cleared', 'issue'].includes(st)) return json(400, { error: 'bad_clearance' });
     k.clearances = Object.assign({}, k.clearances, { [o.id]: Object.assign({ area: o.area }, (k.clearances || {})[o.id], { status: st, at: nowIso(), by: user.name }) });
     X.log(k, `${o.area} clearance set to "${st}" by HR.`, user);
+  } else if (name === 'approval-decide') {
+    if (!X.decide(setup, k, String(body.approvalId || ''), body.decision === 'yes', body.note, user)) return json(409, { error: 'not_pending' });
+  } else if (name === 'approval-remind') {
+    out = { notes: await X.remind(setup, k, String(body.approvalId || ''), user) };
   } else if (name === 'walk') {
     const a = String(body.action || '');
     if (a === 'jump') {
@@ -176,6 +194,17 @@ async function letterFile(store, body) {
   return json(200, { name: a.name, base64: a.base64 });
 }
 
+async function assetFile(store, body) {
+  const id = String(body.id || '');
+  if (!ID_RE.test(id)) return json(400, { error: 'bad_id' });
+  const rec = await store.get('exit_cases', id);
+  const a = rec && (rec.data.assets || [])[Number(body.index)];
+  if (!a || !a.path) return json(404, { error: 'no_file' });
+  if (!blob.storageConfigured()) return json(503, { error: 'storage_not_configured' });
+  try { const f = await blob.getFile(a.path); return json(200, { mime: f.contentType, base64: f.buffer.toString('base64') }); }
+  catch (e) { return json(502, { error: 'storage_error', detail: String(e && e.message || e).slice(0, 200) }); }
+}
+
 async function whatsappReply(store, k, text, user) {
   if (!wa.waConfigured() || !k.employee.phone) return { ok: false, note: 'WhatsApp is not connected or no mobile number' };
   try {
@@ -202,8 +231,9 @@ async function openCaseFor(store, phone) {
   return null;
 }
 
+// Exit takes a message when it belongs to an exit case, an alumni STOP, or a new "I want to resign" (see employee.js).
 async function claims(m, store) {
-  return Boolean(m && m.from && await openCaseFor(store, m.from));
+  return Boolean(m && m.from && await E.resolve(store, m));
 }
 
 async function saveMsg(store, id, m) { await store.put('exit_messages', id, Object.assign({ at: nowIso(), channel: 'whatsapp' }, m), SYSTEM); }
@@ -225,26 +255,42 @@ async function alertHr(store, k) {
 }
 
 async function handle(m, store) {
-  const k = await openCaseFor(store, m.from);
-  if (!k) return;
+  const r = await E.resolve(store, m);
+  if (!r) return;
   const id = 'xm-' + crypto.createHash('sha1').update(String(m.id || m.from + m.timestamp)).digest('hex').slice(0, 24);
   if (await store.get('exit_messages', id)) return; // Meta retries: handle each message once
   const text = m.media ? `[${m.type === 'image' ? 'Photo' : 'File'}${m.media.filename ? ': ' + m.media.filename : ''}]${m.text ? ' ' + m.text : ''}` : (m.text || `[${m.type || 'message'} received]`);
-  await saveMsg(store, id, { caseId: k.id, direction: 'in', text, waId: m.id || '', kind: m.type || 'text' });
-  const now = nowIso();
-  k.lastInboundAt = now;
-  k.alerts = (k.alerts || []).concat([{ why: `Employee wrote on WhatsApp: "${text.slice(0, 160)}"`, at: now, open: true }]).slice(-50);
-  // A short holding reply, at most once every 6 hours, so the employee knows the message arrived.
-  if (wa.waConfigured() && (!k.lastAutoReplyAt || Date.now() - Date.parse(k.lastAutoReplyAt) > REPLY_GAP_MS)) {
-    const first = (k.employee.name || '').split(' ')[0] || 'there';
-    const reply = `Thank you, ${first}. Your HR team has your message and will reply here soon.`;
-    let waId = '', error = '';
-    try { waId = (await wa.sendText(k.employee.phone, reply)).id || ''; } catch (e) { error = e.message; }
-    await saveMsg(store, 'xo-' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex'), { caseId: k.id, direction: 'out', text: reply, waId, error, source: 'system', kind: 'text' });
-    k.lastAutoReplyAt = now;
+  const inAt = nowIso();
+  if (r.kind === 'alumni-stop') {
+    await saveMsg(store, id, { caseId: r.rec.data.caseId || '', direction: 'in', text, waId: m.id || '', kind: m.type || 'text', at: inAt });
+    await E.alumniStop(store, r.rec);
+    return;
   }
-  // The employee just wrote, so the 24-hour window is open: send anything that was held.
-  if (wa.waConfigured()) await X.replayHeld(store, k, (await S.load(store, k.client)).setup).catch(e => console.error('exit replay failed', e && e.message));
+  let k;
+  if (r.kind === 'intent') {
+    k = await E.startIntent(store, r.emp, m);
+    await saveMsg(store, id, { caseId: k.id, direction: 'in', text, waId: m.id || '', kind: m.type || 'text', at: inAt });
+  } else {
+    k = r.k;
+    await saveMsg(store, id, { caseId: k.id, direction: 'in', text, waId: m.id || '', kind: m.type || 'text', at: inAt });
+    const { setup } = await S.load(store, k.client);
+    const handled = await E.caseReply(store, setup, k, m);
+    if (!handled) {
+      k.alerts = (k.alerts || []).concat([{ why: `Employee wrote on WhatsApp: "${text.slice(0, 160)}"`, at: inAt, open: true }]).slice(-50);
+      // A short holding reply, at most once every 6 hours, so the employee knows the message arrived.
+      if (wa.waConfigured() && (!k.lastAutoReplyAt || Date.now() - Date.parse(k.lastAutoReplyAt) > REPLY_GAP_MS)) {
+        const first = (k.employee.name || '').split(' ')[0] || 'there';
+        const reply = `Thank you, ${first}. Your HR team has your message and will reply here soon.`;
+        let waId = '', error = '';
+        try { waId = (await wa.sendText(k.employee.phone, reply)).id || ''; } catch (e) { error = e.message; }
+        await saveMsg(store, 'xo-' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex'), { caseId: k.id, direction: 'out', text: reply, waId, error, source: 'system', kind: 'text' });
+        k.lastAutoReplyAt = inAt;
+      }
+    }
+    // The employee just wrote, so the 24-hour window is open: send anything that was held.
+    if (wa.waConfigured() && k.status === 'open') await X.replayHeld(store, k, setup).catch(e => console.error('exit replay failed', e && e.message));
+  }
+  k.lastInboundAt = inAt;
   await alertHr(store, k);
   await store.put('exit_cases', k.id, k, SYSTEM);
 }
@@ -265,6 +311,7 @@ async function tick(store, now = Date.now()) {
       return s;
     });
     if (setup.sending && setup.sending.auto) sent += await X.runDue(store, setup, k, SYSTEM, now);
+    await X.escalate(setup, k, now);
     // Legal deadlines: wages within the working days set in Exit setup, gratuity within its days.
     const c = F.compute(setup, k), today = R.todayIst(cnow), st = (k.fnf && k.fnf.status) || '';
     if (c && !c.missing.length) {
