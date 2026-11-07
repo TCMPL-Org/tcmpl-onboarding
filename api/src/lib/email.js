@@ -31,7 +31,7 @@ function htmlOf(text, buttons) {
 }
 
 let client = null;
-async function send({ to, cc, subject, text, buttons, replyTo }) {
+async function send({ to, cc, subject, text, buttons, replyTo, attachments }) {
   if (!emailConfigured()) { const e = new Error('Email is not configured'); e.code = 'email_not_configured'; throw e; }
   const toList = addresses(to), ccList = addresses(cc).filter(a => !toList.includes(a)), reply = addresses(replyTo);
   if (!toList.length) { const e = new Error('No valid email address'); e.code = 'no_recipient'; throw e; }
@@ -43,6 +43,12 @@ async function send({ to, cc, subject, text, buttons, replyTo }) {
     recipients: { to: toList.map(address => ({ address })), cc: ccList.map(address => ({ address })) },
     replyTo: reply.map(address => ({ address }))
   };
+  // attachments: [{ name, contentType, base64 }], at most ~10 MB together (Azure limit)
+  const att = (attachments || []).filter(a => a && a.base64 && a.name);
+  let total = 0;
+  const keep = att.filter(a => (total += a.base64.length * 0.75) <= 9.5 * 1024 * 1024);
+  if (keep.length) message.attachments = keep.map(a => ({ name: a.name, contentType: a.contentType || 'application/octet-stream', contentInBase64: a.base64 }));
+  if (keep.length < att.length) message.content.plainText += '\n\n(Some files were too large for email; they were sent on WhatsApp.)';
   const poller = await client.beginSend(message);
   const res = await poller.pollUntilDone();
   if (res.status && !/succeeded/i.test(res.status)) { const e = new Error('Email not sent: ' + res.status); e.code = 'email_failed'; throw e; }

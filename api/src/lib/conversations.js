@@ -14,6 +14,7 @@ const induction = require('./induction');
 const inductionRun = require('./induction-run');
 const readiness = require('./readiness');
 const checkins = require('./checkins');
+const notify = require('./notify');
 
 const SYSTEM = { name: 'onboarding-agent' };
 
@@ -100,6 +101,12 @@ async function startForOffer(p, user) {
     }
   }
   await store.put('candidates', candidateId, cand, user);
+  // The same offer by email, with the letter attached and one-click Accept / Questions / Decline.
+  if (await notify.toCandidate(store, candidateId, cand, {
+    subject: `Your offer from ${cand.company || cand.clientLabel || 'us'}`, offer: true, kind: 'offer', key: 'offer',
+    text: `Dear ${cand.first || cand.name || 'candidate'},\n\nCongratulations! Please find your offer letter for the role of ${cand.role || 'the position'} attached${cand.doj ? ', with joining on ' + niceDate(cand.doj) : ''}.${letterNote(cand)}\n\nWe have also sent it to you on WhatsApp, where our onboarding assistant can answer your questions.`,
+    attachments: pdf ? [{ name: cand.letterFile, contentType: 'application/pdf', base64: pdf }] : []
+  })) await store.put('candidates', candidateId, cand, user);
   if (!wa.waConfigured()) return { status: 200, body: { candidateId, sent: false, reason: 'whatsapp_not_configured' } };
   try {
     const doc = wa.templateWantsDocument() ? { id: await letterMedia(store, candidateId, cand), filename: cand.letterFile } : null;
@@ -220,7 +227,8 @@ async function sendManual(p, user) {
 async function pushItems(p, user) {
   const store = getStore();
   if (!store) return { status: 503, body: { error: 'database_not_configured' } };
-  if (!wa.waConfigured()) return { status: 503, body: { error: 'whatsapp_not_configured' } };
+  const viaWa = p.wa !== false;
+  if (viaWa && !wa.waConfigured()) return { status: 503, body: { error: 'whatsapp_not_configured' } };
   const candidateId = str(p && p.candidateId, 40);
   if (!/^wa-\d{11,15}$/.test(candidateId)) return { status: 400, body: { error: 'candidate_required' } };
   const items = Array.isArray(p.items) ? p.items.slice(0, 10) : [];
@@ -229,8 +237,27 @@ async function pushItems(p, user) {
   if (!rec) return { status: 404, body: { error: 'candidate_not_found' } };
   const cand = Object.assign({}, rec.data);
   const label = str(p.touchpoint, 120);
-  let sent = 0;
-  for (const it of items) {
+  let sent = 0, emailed = false;
+  // Email copy first (once; a held WhatsApp send is replayed later without emailing again).
+  if (p.email !== false && !p.emailed) {
+    const lt = items.find(it => it && it.type === 'letter');
+    let att = [];
+    if (lt) {
+      const fresh = typeof lt.pdfBase64 === 'string' && lt.pdfBase64.length > 100 && lt.pdfBase64.length < MAX_PDF_B64 ? lt.pdfBase64 : '';
+      const saved = fresh ? null : await store.get('letters', candidateId);
+      const b64 = fresh || (saved && saved.data && saved.data.pdfBase64) || '';
+      if (b64) att = [{ name: str(lt.filename, 150) || cand.letterFile || 'Offer_Letter.pdf', contentType: 'application/pdf', base64: b64 }];
+    }
+    const texts = items.filter(it => it && it.type === 'text' && typeof it.text === 'string').map(it => it.text.trim());
+    const opts = items.filter(it => it && Array.isArray(it.buttons)).flatMap(it => it.buttons);
+    const isOffer = str(p.touchpointKey, 60) === 'offer' || (lt && opts.some(b => /accept/i.test(b)));
+    emailed = await notify.toCandidate(store, candidateId, cand, {
+      subject: `${label || 'Onboarding update'} · ${cand.company || cand.clientLabel || ''}`.replace(/ · $/, ''), kind: 'journey', key: str(p.touchpointKey, 60),
+      text: texts.join('\n\n') + (lt ? (texts.length ? '\n\n' : '') + `Your offer letter is attached.${letterNote(cand)}` : ''),
+      options: isOffer ? [] : opts, offer: Boolean(isOffer), attachments: att
+    });
+  }
+  for (const it of (viaWa ? items : [])) {
     try {
       if (it && it.type === 'letter') {
         if (typeof it.pdfBase64 === 'string' && it.pdfBase64.length > 100 && it.pdfBase64.length < MAX_PDF_B64) {
@@ -260,11 +287,12 @@ async function pushItems(p, user) {
     }
   }
   cand.lastMessageAt = new Date().toISOString();
+  if (!viaWa && !emailed) return { status: 502, body: { sent: 0, error: 'email_failed', detail: cand.lastEmailError || 'No candidate email, or email is switched off for this client.' } };
   if (label) cand.stage = label;
   const key = str(p.touchpointKey, 60);
   if (key) cand.touchpoints = Object.assign({}, cand.touchpoints, { [key]: { at: cand.lastMessageAt, by: user.name, label } });
   await store.put('candidates', candidateId, cand, user);
-  return { status: 200, body: { sent } };
+  return { status: 200, body: { sent, emailed } };
 }
 
 function windowError(e) {
@@ -328,6 +356,14 @@ async function sendForms(p, user) {
   const files = (Array.isArray(p.files) ? p.files : []).filter(x => x && typeof x.pdfBase64 === 'string' && x.pdfBase64.length > 100 && x.pdfBase64.length < 1500000).slice(0, 8);
   if (!files.length) return { status: 400, body: { error: 'no_forms' } };
   let sent = 0;
+  if (!p.emailed) {
+    await notify.toCandidate(store, candidateId, cand, {
+      subject: `Your joining forms · ${cand.company || cand.clientLabel || ''}`.replace(/ · $/, ''), kind: 'forms', key: 'forms',
+      text: (str(p.text, 1000) || 'These are your joining forms, filled from your documents and answers. Please check every detail, especially names, dates of birth and nominee shares.') ,
+      options: ['All correct', 'Something is wrong'],
+      attachments: files.map(x => ({ name: (str(x.filename, 120) || 'Joining_form.pdf').replace(/[^\w.-]+/g, '_'), contentType: 'application/pdf', base64: x.pdfBase64 }))
+    });
+  }
   try {
     for (const x of files) {
       const name = (str(x.filename, 120) || 'Joining_form.pdf').replace(/[^\w.-]+/g, '_');
@@ -407,7 +443,7 @@ async function replayHeld(store, candidateId) {
   await store.put('candidates', candidateId, Object.assign({}, rec.data, { held: [] }), { name: 'onboarding-agent' });
   for (const h of held) {
     const user = { name: h.by || 'onboarding-agent' };
-    const p = Object.assign({}, h.payload, { candidateId });
+    const p = Object.assign({}, h.payload, { candidateId, emailed: true });
     if (h.action === 'push') await pushItems(p, user);
     else if (h.action === 'text') await sendManual(p, user);
     else if (h.action === 'docs') await documents.request(store, candidateId, user);

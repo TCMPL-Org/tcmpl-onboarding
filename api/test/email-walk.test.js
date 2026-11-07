@@ -111,3 +111,35 @@ test('journey check-ins: saved setup, walkthrough jump runs resignation check, m
   assert.equal(c.checkins.asks['mgr-pulse@14'].answer, 'Some concerns');
   assert.ok(c.handovers.some(h => /Fortnightly check-in \(manager\)/.test(h.why)));
 });
+
+test('candidate gets an email copy of WhatsApp sends: offer letter attached with Accept links and client CC; forms attached', async () => {
+  const store = getStore();
+  wa.uploadMedia = async () => 'mid';
+  wa.sendDocument = async () => ({ id: 'w' });
+  const id = 'wa-917000000077';
+  await store.put('journeys', 'mirrorclient', { email: { replyTo: 'hr@example.com', cc: 'clienthr@example.com' } }, user);
+  await store.put('candidates', id, { phone: '917000000077', name: 'Ravi Kumar', first: 'Ravi', email: 'ravi@example.com', company: 'Northpeak', letterProtected: true, letterFile: 'Offer.pdf', profile: { doj: '2026-12-01', client: 'mirrorclient' } }, user);
+  await store.put('letters', id, { pdfBase64: 'JVBERi0xLjQK'.repeat(20), filename: 'Offer.pdf' }, user);
+  sentMail.length = 0;
+  let r = await handlers.waPush({ body: { candidateId: id, touchpoint: 'Offer letter', touchpointKey: 'offer', items: [{ type: 'letter' }, { type: 'text', text: 'Here is your offer.', buttons: ['Accept offer', 'I have questions', 'Decline'] }] }, user });
+  assert.equal(r.status, 200);
+  assert.equal(r.jsonBody.emailed, true);
+  const m = sentMail[0];
+  assert.equal(m.recipients.to[0].address, 'ravi@example.com');
+  assert.equal(m.recipients.cc[0].address, 'clienthr@example.com');
+  assert.equal(m.attachments[0].name, 'Offer.pdf');
+  assert.match(m.content.plainText, /MMDDYYYY/);
+  const href = /href="([^"]+)"[^>]*>Accept offer/.exec(m.content.html);
+  const page = await handlers.confirmLink({ token: new URL(href[1].replace(/&amp;/g, '&')).searchParams.get('t') });
+  assert.match(page.body, /acceptance is recorded/);
+  assert.equal((await store.get('candidates', id)).data.stage, 'Offer accepted');
+  // email only (WhatsApp unticked)
+  sentMail.length = 0;
+  r = await handlers.waPush({ body: { candidateId: id, touchpoint: 'Company story', touchpointKey: 'story', wa: false, items: [{ type: 'text', text: 'Our story', buttons: ['Thanks'] }] }, user });
+  assert.equal(r.status, 200);
+  assert.match(sentMail[0].content.plainText, /Please answer on WhatsApp: Thanks/);
+  // forms
+  sentMail.length = 0;
+  await handlers.formsAction({ action: 'send', body: { candidateId: id, files: [{ filename: 'Form 11.pdf', pdfBase64: 'JVBERi0xLjQK'.repeat(20) }] }, user });
+  assert.equal(sentMail[0].attachments[0].name, 'Form_11.pdf');
+});

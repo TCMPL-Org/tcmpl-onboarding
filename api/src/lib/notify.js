@@ -67,7 +67,7 @@ async function candidateEmail(p, user) {
   if (!to.length) return { status: 400, body: { error: 'candidate_email_missing', detail: 'Add the candidate\'s email on the Offer desk.' } };
   const st = await settings(store, cand.profile && cand.profile.client);
   try {
-    const r = await email.send({ to, cc: [].concat(email.addresses(p.cc)), subject: str(p.subject, 250), text: str(p.body, 8000), replyTo: st.replyTo });
+    const r = await email.send({ to, cc: [].concat(email.addresses(p.cc), email.addresses(st.cc)), subject: str(p.subject, 250), text: str(p.body, 8000), replyTo: st.replyTo });
     logEmail(cand, { kind: 'candidate', key: str(p.key, 60), to: r.to, cc: r.cc, subject: str(p.subject, 250), by: user.name });
     await store.put('candidates', candidateId, cand, user);
     return { status: 200, body: { sent: true, to: r.to, cc: r.cc } };
@@ -85,6 +85,26 @@ async function auto(store, candidateId, cand, { to, cc, subject, text, buttons, 
     logEmail(cand, { kind, k, to: r.to, cc: r.cc, subject, by: 'onboarding-agent' });
     return true;
   } catch (e) { console.error('auto email failed', e && e.message); return false; }
+}
+
+// A copy of what the candidate gets on WhatsApp, by email, with the same files attached and the client's CC.
+// Client setting journeys/<client>.email.mirror (default on). options = the WhatsApp reply buttons.
+// offer: true adds one-click Accept / I have questions / Decline links.
+async function toCandidate(store, candidateId, cand, { subject, text, options, attachments, kind, key, offer }) {
+  if (!email.emailConfigured()) return false;
+  const to = email.addresses(cand.email || (cand.profile && cand.profile.email));
+  if (!to.length) return false;
+  const st = await settings(store, cand.profile && cand.profile.client);
+  if (st.mirror === false) return false;
+  let body = String(text || '').replace(/\*([^*\n]+)\*/g, '$1').replace(/\[Buttons:[^\]]*\]/g, '').trim();
+  let buttons = [];
+  if (offer) buttons = [['Accept offer', 'accept'], ['I have questions', 'questions'], ['Decline', 'decline']].map(([label, v], i) => ({ label, url: links.link({ c: candidateId, a: 'offer', v }), secondary: i > 0 })).filter(b => b.url);
+  else if (options && options.length) body += `\n\nPlease answer on WhatsApp: ${options.join(' / ')}`;
+  try {
+    const r = await email.send({ to, cc: st.cc, subject, text: body, buttons, replyTo: st.replyTo, attachments });
+    logEmail(cand, { kind: kind || 'candidate-copy', k: key || '', to: r.to, cc: r.cc, subject, files: (attachments || []).map(a => a.name), by: 'onboarding-agent' });
+    return true;
+  } catch (e) { console.error('candidate email failed', e && e.message); cand.lastEmailError = e.message; return false; }
 }
 
 function hrAddress(st) { return email.addresses(st.replyTo)[0] || ''; }
@@ -116,6 +136,12 @@ async function confirm(token) {
     if (p.a === 'ind-yes' && st.status !== 'done') { st.status = 'done'; st.doneAt = nowIso(); st.confirmedBy = 'owner'; }
     if (p.a === 'ind-no') cand.handovers = (cand.handovers || []).concat([{ why: `Induction: owner says "${p.t || p.k}" has not happened yet`, at: nowIso(), open: true }]);
     msg = p.a === 'ind-yes' ? 'Thank you, noted that it happened.' : 'Thank you. HR will follow up to set a new time.';
+  } else if (p.a === 'offer') {
+    const now = nowIso();
+    if (p.v === 'accept') { cand.acceptedAt = cand.acceptedAt || now; cand.stage = 'Offer accepted'; msg = `Thank you${cand.first ? ', ' + cand.first : ''}! Your acceptance is recorded. We will be in touch on WhatsApp for the next steps.`; }
+    else if (p.v === 'decline') { cand.declinedAt = now; cand.stage = 'Offer declined'; cand.handovers = (cand.handovers || []).concat([{ why: 'Candidate clicked Decline in the offer email: call them today', at: now, open: true }]); msg = 'Thank you for letting us know. Someone from HR will call you shortly.'; }
+    else if (p.v === 'questions') { cand.handovers = (cand.handovers || []).concat([{ why: 'Candidate has questions about the offer (from email)', at: now, open: true }]); msg = 'Thank you. HR will contact you to answer your questions. You can also type them on WhatsApp.'; }
+    else return page('Unknown answer.', false);
   } else if (p.a === 'ck') {
     const run = require('./induction-run');
     const checkins = require('./checkins');
@@ -143,9 +169,9 @@ async function saveSettings(p, user) {
   const client = str(p && p.client, 60).replace(/[^\w-]/g, '');
   if (!client) return { status: 400, body: { error: 'client_required' } };
   const rec = await store.get('journeys', client);
-  const data = Object.assign({}, rec && rec.data, { client, email: { replyTo: email.addresses(p.replyTo).join(', '), cc: email.addresses(p.cc).join(', ') }, updated: nowIso() });
+  const data = Object.assign({}, rec && rec.data, { client, email: { replyTo: email.addresses(p.replyTo).join(', '), cc: email.addresses(p.cc).join(', '), mirror: p.mirror !== false }, updated: nowIso() });
   await store.put('journeys', client, data, user);
   return { status: 200, body: { email: data.email, configured: email.emailConfigured(), sender: process.env.ACS_SENDER || '' } };
 }
 
-module.exports = { ownerTask, candidateEmail, auto, confirm, settings, saveSettings, hrAddress };
+module.exports = { toCandidate, ownerTask, candidateEmail, auto, confirm, settings, saveSettings, hrAddress };

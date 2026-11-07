@@ -59,8 +59,22 @@ function windowClosed(e) {
 // Sends messages in order. If WhatsApp refuses because the 24-hour window is closed, the rest are held on the
 // candidate (induction.waiting) and go out when the candidate next writes; an approved "nudge" template
 // (WHATSAPP_NUDGE_TEMPLATE, body {{1}} = first name, {{2}} = what it's about) asks them to reply.
-async function deliver(store, candidateId, cand, msgs, by, about, source = 'induction') {
+async function deliver(store, candidateId, cand, msgs, by, about, source = 'induction', noEmail = false) {
   let sent = 0;
+  // Email copy of what goes to the candidate (not the agent's conversational replies), files attached.
+  if (source !== 'agent' && !noEmail && msgs.length) {
+    const att = [];
+    for (const r of msgs) {
+      if (!r.file) continue;
+      try {
+        const rec = await store.get('content', r.file.id);
+        if (rec && rec.data && rec.data.size <= 9 * 1024 * 1024) { const f = await blob.getFile(rec.data.blobPath); att.push({ name: rec.data.name, contentType: rec.data.mime, base64: f.buffer.toString('base64') }); }
+      } catch (e) { console.error('attachment failed', e && e.message); }
+    }
+    const text = msgs.map(r => r.text || r.caption || '').filter(Boolean).join('\n\n') || (att.length ? 'Please find the attached file.' : '');
+    const options = msgs.flatMap(r => r.buttons || []);
+    await notify.toCandidate(store, candidateId, cand, { subject: `${String(about || 'Onboarding update').slice(0, 80)} · ${cand.company || cand.clientLabel || ''}`.replace(/ · $/, ''), text, options, attachments: att, kind: source });
+  }
   for (let i = 0; i < msgs.length; i++) {
     const r = msgs[i];
     let waId, text;
@@ -199,7 +213,7 @@ async function sendCheckin(store, id, cand, c, by, ctx) {
     }
     return n;
   }
-  if (c.wa) { await deliver(store, id, cand, c.wa, by, c.item.title, 'checkin'); n++; }
+  if (c.wa) { await deliver(store, id, cand, c.wa, by, c.item.title, 'checkin', Boolean(c.email)); n++; }
   if (c.email) {
     const ok = await notify.auto(store, id, cand, Object.assign({ kind: 'checkin', k: c.key }, c.email));
     const a = cand.checkins && cand.checkins.asks[c.key];

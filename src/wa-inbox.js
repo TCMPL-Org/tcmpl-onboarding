@@ -116,8 +116,8 @@ async function collectTouchpoint() {
   return { items, skipped };
 }
 
-async function push(candidateId, items, touchpoint, touchpointKey) {
-  return getJson('/api/wa/push', { method: 'POST', body: JSON.stringify({ candidateId, items, touchpoint, touchpointKey }) }).catch(() => ({ ok: false, body: null }));
+async function push(candidateId, items, touchpoint, touchpointKey, extra) {
+  return getJson('/api/wa/push', { method: 'POST', body: JSON.stringify(Object.assign({ candidateId, items, touchpoint, touchpointKey }, extra || {})) }).catch(() => ({ ok: false, body: null }));
 }
 
 function explain(r) {

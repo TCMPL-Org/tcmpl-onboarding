@@ -523,7 +523,7 @@ function renderMsgStep(box, c, s, when) {
     ${!owner ? `<label class="note" style="display:flex;gap:6px;align-items:center;margin-top:6px"><input type="checkbox" id="jlPrevLetter" ${preview.letter ? 'checked' : ''}> Attach the offer letter PDF</label>` : ''}
     ${preview.extraDocs && !owner ? `<p class="note">${preview.extraDocs} other attachment(s) in this step are examples only and are not sent.</p>` : ''}
     ${!owner ? `<label class="note" style="display:flex;gap:6px;align-items:center;margin-top:6px"><input type="checkbox" id="jlPrevWa" checked> WhatsApp</label>
-      <label class="note" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="jlPrevEmail" ${health.email && candEmail(c) ? '' : 'disabled'}> Email to ${esc(candEmail(c) || 'candidate (no email on the offer)')}${health.email ? '' : ' (email not set up yet)'}</label>` : ''}`;
+      <label class="note" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="jlPrevEmail" ${health.email && candEmail(c) ? 'checked' : 'disabled'}> Email to ${esc(candEmail(c) || 'candidate (no email on the offer)')}${health.email ? ' · same text and attachments, with the client\'s CC (Client setup → Email settings)' : ' (email not set up yet)'}</label>` : ''}`;
   box.innerHTML = panel({
     title: s.label, status: s.status, when,
     who: owner ? (s.track === 'm' ? 'For the manager, not the candidate' : 'For IT, Admin and Security, not the candidate') : 'To the candidate on WhatsApp',
@@ -898,14 +898,11 @@ async function sendPreview(s) {
   if (!viaWa && !viaEmail) { U().toast('Choose WhatsApp, email or both.'); return; }
   if (!items.length) { U().toast('Nothing to send.'); return; }
   $('#jlPrevSend').disabled = true;
-  if (viaEmail) {
-    const er = await U().getJson('/api/notify/candidate', { method: 'POST', body: JSON.stringify({ candidateId: c.id, key: s.key, subject: `${s.label} · ${c.clientLabel || ''}`.replace(/ · $/, ''), body: text }) }).catch(() => ({ ok: false }));
-    if (!er.ok) U().toast('Email not sent: ' + ((er.body && (er.body.detail || er.body.error)) || 'error'));
-    else if (!viaWa) { $('#jlPrevSend').disabled = false; await afterSend(er, `Emailed "${s.label}" to ${c.name}.`); return; }
-  }
-  const r = await U().push(c.id, items, s.label, s.key);
+  const r = await U().push(c.id, items, s.label, s.key, { wa: viaWa, email: Boolean(viaEmail) });
   if ($('#jlPrevSend')) $('#jlPrevSend').disabled = false;
-  await afterSend(r, `Sent "${s.label}" to ${c.name}${viaEmail ? ' on WhatsApp and email' : ' on WhatsApp'}.`);
+  const em = r.ok && r.body && r.body.emailed;
+  if (viaEmail && r.ok && !em) U().toast('WhatsApp sent, but the email did not go: check the candidate\'s email and Client setup → Email settings.');
+  await afterSend(r, `Sent "${s.label}" to ${c.name}${viaWa ? ' on WhatsApp' : ''}${viaWa && em ? ' and' : ''}${em ? ' by email' : ''}.`);
 }
 
 async function sendLetter() {
