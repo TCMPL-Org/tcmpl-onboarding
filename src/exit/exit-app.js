@@ -273,15 +273,22 @@ async function renderJourney() {
   const sec = $('#ex-journey');
   const open = cases.filter(k => k.status === 'open');
   if (!curId || !cases.some(k => k.id === curId)) curId = (open[0] || cases[0] || {}).id || '';
-  sec.innerHTML = `<div class="intro"><div><h2>Case journey</h2><p>Every step of the case on one screen, grouped by stage, with today marked. Sending each step on WhatsApp and email is the next build batch; today the plan, the employee's WhatsApp messages and HR items are live.</p></div>
+  sec.innerHTML = `<div class="intro"><div><h2>Case journey</h2><p>Every step of the case on one screen, grouped by stage, with today marked. Send a step on WhatsApp and email, or let Exit setup send due steps by themselves. Approvers and clearance owners answer with one click in their email.</p></div>
     <div class="row"><select id="exPick">${cases.map(k => `<option value="${esc(k.id)}" ${k.id === curId ? 'selected' : ''}>${esc(k.name)} · ${esc(k.typeName)} · ${fmtD(k.lwd)}${k.status !== 'open' ? ' (' + k.status + ')' : ''}</option>`).join('')}</select></div></div>
     <div id="exCase">${curId ? '<div class="note">Loading…</div>' : '<div class="card note">No cases yet. Raise one on the Exit desk.</div>'}</div>`;
   if ($('#exPick')) $('#exPick').onchange = () => { curId = $('#exPick').value; renderJourney(); };
   if (!curId) return;
   const r = await post('case', { id: curId });
   if (!r.ok) { $('#exCase').innerHTML = '<div class="card">This case could not be loaded.</div>'; return; }
-  const k = r.body.case, msgs = r.body.messages || [], today = r.body.today || todayIso();
-  const e = k.employee || {};
+  drawCase(r.body);
+}
+
+const CH = { both: 'WhatsApp and email', whatsapp: 'WhatsApp', email: 'Email' };
+const ST = { planned: 'planned', due: 'due', sent: 'sent', held: 'held for reply', failed: 'not sent', missed: 'missed', done: 'done', skipped: 'skipped' };
+
+function drawCase(data) {
+  const k = data.case, msgs = data.messages || [], today = data.today || todayIso();
+  const e = k.employee || {}, isOpen = k.status === 'open', auto = Boolean(setupRec && setupRec.setup.sending && setupRec.setup.sending.auto);
   const stages = setupRec ? setupRec.options.stages : [];
   let todayShown = false;
   const plan = stages.map(([key, label]) => {
@@ -290,13 +297,25 @@ async function renderJourney() {
     return `<div class="ex-stage"><h4>${esc(label)}</h4>${steps.map(s => {
       let line = '';
       if (!todayShown && s.date > today) { todayShown = true; line = `<div class="ex-today">Today · ${fmtD(today)}</div>`; }
+      const canSend = isOpen && ['planned', 'due', 'failed', 'missed', 'held'].includes(s.status);
       return `${line}<div class="ex-step ex-${esc(s.status)}"><div class="ex-when">${fmtD(s.date)}<span>${esc(s.time)}</span></div>
-        <div><b>${esc(s.title)}</b><div class="note">To ${esc(s.to)} · ${s.channel === 'both' ? 'WhatsApp and email' : esc(s.channel === 'whatsapp' ? 'WhatsApp' : 'Email')}</div></div>
-        <span class="chip">${esc(s.status)}</span></div>`;
+        <div><b>${esc(s.title)}</b><div class="note">To ${esc(s.to)} · ${esc(CH[s.channel] || s.channel)}</div>
+          ${s.note ? `<div class="note ex-stepnote">${esc(s.note)}${s.at ? ' · ' + fmtDT(s.at) : ''}</div>` : ''}
+          ${isOpen ? `<div class="ex-stepbtns">${canSend ? `<button class="btn small primary" type="button" data-send="${esc(s.key)}">Send now</button>` : ''}${!['done', 'skipped'].includes(s.status) ? `<button class="btn small" type="button" data-mark="${esc(s.key)}" data-v="done">Mark done</button><button class="btn small" type="button" data-mark="${esc(s.key)}" data-v="skipped">Skip</button>` : `<button class="btn small" type="button" data-mark="${esc(s.key)}" data-v="planned">Undo</button>`}</div>` : ''}</div>
+        <span class="chip">${esc(ST[s.status] || s.status)}</span></div>`;
     }).join('')}</div>`;
   }).join('') + (todayShown ? '' : `<div class="ex-today">Today · ${fmtD(today)}</div>`);
   const alerts = (k.alerts || []).map((a, i) => ({ a, i })).filter(x => x.a.open);
-  $('#exCase').innerHTML = `<div class="ex-grid">
+  const owners = (setupRec && setupRec.setup.owners) || [];
+  const clr = k.clearances || {};
+  const chainTxt = a => a.chain.map(s => `${esc(s.person && s.person !== s.role ? `${s.person} (${s.role})` : s.role)} <span class="chip${s.status === 'Approved' ? ' ex-green' : s.status === 'Rejected' ? ' ex-red' : s.status === 'Asked' ? ' ex-amber' : ''}">${esc(s.status)}</span>`).join(a.mode === 'Parallel' ? ' + ' : ' → ');
+  $('#exCase').innerHTML = `${isOpen ? `<div class="card ex-walk"><b>Walkthrough clock</b>${data.clock ? ` <span class="chip ex-amber">Case clock: ${esc(fmtDT(data.clock))}</span>` : ' <span class="note">real time</span>'}
+      <span class="row" style="gap:6px;flex-wrap:wrap"><select id="exWAnchor"><option value="formal">Formal date</option><option value="lwd">Last working day</option></select>
+      <label class="note">day <input type="number" id="exWDay" value="0" class="ex-num"></label><input type="text" id="exWTime" value="10:30" style="width:64px">
+      <button class="btn small" type="button" data-walk="jump">Jump</button><button class="btn small primary" type="button" data-walk="run">Run due steps</button>
+      <button class="btn small" type="button" data-walk="realtime">Back to real time</button><button class="btn small" type="button" data-walk="reset">Reset case</button></span>
+      <span class="note">Auto-send is ${auto ? '<b>on</b>: due steps go out by themselves between 8 am and 9 pm' : '<b>off</b>: HR sends each step (switch it on in Exit setup)'}.</span></div>` : ''}
+    <div class="ex-grid">
     <div>
       ${alerts.length ? `<div class="card ex-redcard"><h3>Needs HR</h3>${alerts.map(({ a, i }) => `<div class="row" style="justify-content:space-between;gap:8px;margin:4px 0"><span>${esc(a.why)} <span class="note">${fmtDT(a.at)}${a.alertedAt ? ' · HR emailed' : ''}</span></span><button class="btn small" data-close="${i}" type="button">Done</button></div>`).join('')}</div>` : ''}
       <div class="card"><h3>Steps</h3>${plan || '<p class="note">No steps apply to this case.</p>'}</div>
@@ -305,21 +324,41 @@ async function renderJourney() {
       <div class="card"><h3>Case facts</h3><dl class="ex-dl">
         <dt>Employee</dt><dd>${esc(e.name)}${e.code ? ' · ' + esc(e.code) : ''}<div class="note">${esc([e.designation, e.dept, e.level, e.location].filter(Boolean).join(' · '))}</div></dd>
         <dt>Contact</dt><dd>${esc(e.phone ? '+' + e.phone : 'no mobile')}${e.email ? '<br>' + esc(e.email) : ''}</dd>
-        <dt>Manager</dt><dd>${esc(e.manager || '')}${e.managerEmail ? '<br>' + esc(e.managerEmail) : ''}</dd>
+        <dt>Manager</dt><dd>${esc(e.manager || '')}${e.managerEmail ? '<br>' + esc(e.managerEmail) : '<div class="note">no email: approvals and handover cannot be sent</div>'}</dd>
         <dt>Type</dt><dd>${esc(k.typeName)} · ${esc(k.category)} · raised by ${esc(k.raisedBy)} (${esc(k.source)})</dd>
         <dt>Formal date</dt><dd>${fmtD(k.formal)}${k.first && k.first.slice(0, 10) !== k.formal ? ` <span class="note">(first told manager ${fmtD(k.first)})</span>` : ''}</dd>
         <dt>Notice</dt><dd>${k.noticeDays ? `${k.noticeDays} days · ${esc(k.noticeRule)}<div class="note">from ${fmtD(k.noticeStart)} · ${esc(k.noticeStartRule)}</div>` : esc(k.noticeText)}</dd>
         <dt>Last working day</dt><dd><b>${fmtD(k.lwd)}</b>${k.waiverDays ? ` <span class="note">(${k.waiverDays} days' waiver asked; as per notice ${fmtD(k.noticeLwd)})</span>` : ''}</dd>
-        <dt>Approvals</dt><dd>${(k.approvals || []).map(a => `${esc(a.action)}: ${esc(a.status)}<div class="note">${a.chain.map(s => esc(s.person === s.role ? s.role : `${s.person} (${s.role})`)).join(a.mode === 'Parallel' ? ' + ' : ' → ')}</div>`).join('') || 'None'}</dd>
+        <dt>Approvals</dt><dd>${(k.approvals || []).map(a => `<div style="margin-bottom:6px">${esc(a.action)}: <b>${esc(a.status)}</b><div class="note">${chainTxt(a) || 'no rule'}</div></div>`).join('') || 'None'}</dd>
+        <dt>Clearances</dt><dd>${owners.map(o => { const c = clr[o.id] || {}; return `<span class="chip${c.status === 'cleared' ? ' ex-green' : c.status === 'issue' ? ' ex-red' : ''}" title="${esc(o.items)}">${esc(o.area)}: ${esc(c.status === 'cleared' ? 'cleared' : c.status === 'issue' ? 'pending item' : c.askedAt ? 'asked' : 'not started')}</span>`; }).join(' ')}</dd>
         <dt>Announcement</dt><dd>${esc(k.announce)}</dd><dt>Recruitment</dt><dd>${esc(k.ta)} · ${esc(k.replace)}</dd>
         ${k.reason ? `<dt>Reason</dt><dd>${esc(k.reason)}</dd>` : ''}
-        <dt>Status</dt><dd>${esc(k.status)}</dd></dl>
-        ${k.status === 'open' ? '<div class="row" style="margin-top:10px"><button class="btn small" id="exCancel" type="button">Cancel this case</button></div>' : ''}</div>
+        <dt>Status</dt><dd>${esc(k.status)}${(k.held || []).length ? ` · ${k.held.length} WhatsApp message${k.held.length > 1 ? 's' : ''} waiting for the employee to write` : ''}</dd></dl>
+        ${isOpen ? '<div class="row" style="margin-top:10px"><button class="btn small" id="exCancel" type="button">Cancel this case</button></div>' : ''}</div>
       <div class="card" style="margin-top:16px"><h3>WhatsApp with ${esc((e.name || '').split(' ')[0] || 'the employee')}</h3>
-        ${msgs.length ? `<div class="ex-msgs">${msgs.map(m => `<div class="ex-msg ${m.direction === 'in' ? 'ex-in' : 'ex-out'}">${esc(m.text)}<span>${fmtDT(m.at)}${m.error ? ' · not sent' : ''}</span></div>`).join('')}</div>` : '<p class="note">No messages yet. When the employee writes to the HR WhatsApp number, it shows here and HR is alerted.</p>'}</div>
+        ${msgs.length ? `<div class="ex-msgs">${msgs.map(m => `<div class="ex-msg ${m.direction === 'in' ? 'ex-in' : 'ex-out'}">${esc(m.text)}<span>${fmtDT(m.at)}${m.by ? ' · ' + esc(m.by) : ''}${m.error ? ' · ' + esc(m.error) : ''}</span></div>`).join('')}</div>` : '<p class="note">No messages yet. When the employee writes to the HR WhatsApp number, it shows here and HR is alerted.</p>'}
+        ${isOpen && e.phone ? '<form class="row ex-reply" id="exReply" style="margin-top:8px;gap:6px"><input type="text" id="exReplyText" placeholder="Reply as HR (sent on WhatsApp)…" style="flex:1;min-width:0"><button class="btn small primary" type="submit">Send</button></form>' : ''}</div>
       <div class="card" style="margin-top:16px"><h3>Activity</h3>${(k.log || []).slice().reverse().map(l => `<div class="ex-log"><span class="note">${fmtDT(l.at)} · ${esc(l.by)}</span><br>${esc(l.text)}</div>`).join('')}</div>
     </div></div>`;
-  $$('#exCase [data-close]').forEach(b => { b.onclick = async () => { const x = await post('alert-close', { id: k.id, index: Number(b.dataset.close) }); if (x.ok) { await loadCases(); renderJourney(); } }; });
+
+  const busy = async (btn, fn) => { if (btn) btn.disabled = true; try { await fn(); } finally { if (btn) btn.disabled = false; } };
+  const after = async (x, okText) => {
+    if (!x.ok) { toast(x.body.error === 'exit_off_for_client' ? 'Exit is off for this client.' : x.body.error === 'not_open' ? 'This case is closed.' : 'Not done.'); return; }
+    if (okText) toast(okText);
+    await loadCases();
+    const c = await post('case', { id: k.id });
+    if (c.ok) drawCase(c.body);
+  };
+  $$('#exCase [data-close]').forEach(b => { b.onclick = () => busy(b, async () => after(await post('alert-close', { id: k.id, index: Number(b.dataset.close) }))); });
+  $$('#exCase [data-send]').forEach(b => { b.onclick = () => busy(b, async () => { const x = await post('send', { id: k.id, key: b.dataset.send }); await after(x, x.ok ? `${x.body.result.status === 'sent' ? 'Sent' : x.body.result.status === 'held' ? 'Held until the employee writes' : 'Not sent'}: ${(x.body.result.notes || []).join(' · ')}` : ''); }); });
+  $$('#exCase [data-mark]').forEach(b => { b.onclick = () => busy(b, async () => after(await post('step', { id: k.id, key: b.dataset.mark, status: b.dataset.v }))); });
+  $$('#exCase [data-walk]').forEach(b => { b.onclick = () => busy(b, async () => {
+    const a = b.dataset.walk;
+    if (a === 'reset' && !window.confirm('Reset this case for a new walkthrough? All step statuses, approvals, clearances and its WhatsApp messages are cleared.')) return;
+    const x = await post('walk', { id: k.id, action: a, anchor: $('#exWAnchor').value, day: Number($('#exWDay').value), time: $('#exWTime').value });
+    await after(x, a === 'run' && x.ok ? `${x.body.sent} step${x.body.sent === 1 ? '' : 's'} sent.` : '');
+  }); });
+  if ($('#exReply')) $('#exReply').onsubmit = ev => { ev.preventDefault(); const t = $('#exReplyText').value.trim(); if (!t) return; busy(null, async () => { const x = await post('reply', { id: k.id, text: t }); await after(x, x.ok ? (x.body.result.ok ? 'Sent on WhatsApp.' : x.body.result.held ? 'Held until the employee writes (24-hour window closed).' : 'Not sent: ' + (x.body.result.note || '')) : ''); }); };
   if ($('#exCancel')) $('#exCancel').onclick = async () => {
     const why = window.prompt('Why is this case cancelled? (e.g. resignation withdrawn)');
     if (why === null) return;
@@ -377,6 +416,9 @@ function renderSetup() {
       <h4>People behind the roles</h4>${table('people', s.people, c.people)}</details>
     <details class="card ex-det"><summary>Clearance owners</summary>${table('owners', s.owners, c.owners)}</details>
     <details class="card ex-det"><summary>Journey steps (who gets what, when, on which channel)</summary><p class="note">Day is counted from the anchor: −14 with "Last working day" means two weeks before the last day. Placeholders: {first} {name} {code} {designation} {dept} {location} {company} {type} {formal} {lwd} {notice} {manager} {replace}.</p>${table('steps', s.steps, c.steps)}</details>
+    <details class="card ex-det" open><summary>Sending</summary>
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-g="sending.auto" ${s.sending && s.sending.auto ? 'checked' : ''}> Send due steps by themselves (8 am to 9 pm India time). When off, HR sends each step from Case journey.</label>
+      <p class="note" style="margin:6px 0 0">WhatsApp goes only to the employee, and only within 24 hours of their last message; otherwise it waits until they write (email copies go at once). Approvers, owners, payroll and recruitment get email with one-click buttons.</p></details>
     <details class="card ex-det"><summary>F&F, interview and alumni</summary><div class="ex-form">
       <label>F&F approver<input type="text" data-g="fnf.approver" value="${esc(s.fnf.approver)}"></label>
       <label>Wages paid within (working days)<input type="number" data-g="fnf.wageDays" value="${esc(s.fnf.wageDays)}" class="ex-num"></label>

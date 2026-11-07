@@ -125,6 +125,7 @@ function tcmplDefault() {
     fnf: { approver: 'Client HR', wageDays: 2, gratYears: 5, gratDays: 30 },
     interview: { threshold: 5 },
     alumni: { on: true, exclude: 'Misconduct exits' },
+    sending: { auto: false }, // off: HR sends each step from Case journey; on: due steps go out by themselves (8 am - 9 pm IST)
     steps: STEPS
   }));
 }

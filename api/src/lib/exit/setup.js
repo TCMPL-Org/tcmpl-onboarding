@@ -66,6 +66,7 @@ function cleanSetup(s) {
   out.interview = { threshold: num((s.interview || d.interview).threshold, 1, 50, 5) };
   const al = Object.assign({}, d.alumni, s.alumni);
   out.alumni = { on: al.on !== undefined ? bool(al.on) : true, exclude: str(al.exclude, 120) };
+  out.sending = { auto: bool((s.sending || {}).auto) };
   const stages = D.STAGES.map(x => x[0]);
   out.steps = list(s.steps || d.steps, 60, (x, i) => {
     const title = str(x.title, 120); if (!title) return null;
