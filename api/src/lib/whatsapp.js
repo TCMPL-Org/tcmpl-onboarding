@@ -49,6 +49,11 @@ function parseInbound(body) {
   for (const entry of entries) {
     for (const change of (entry.changes || [])) {
       const v = change.value || {};
+      // Only messages to this app's own number: other numbers in the same WhatsApp account (e.g. another bot's
+      // number) can reach this webhook too, and must never be answered from here.
+      const own = (process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
+      const to = v.metadata && v.metadata.phone_number_id;
+      if (own && to && String(to) !== own) continue;
       const names = {};
       (v.contacts || []).forEach(c => { if (c.wa_id) names[c.wa_id] = c.profile && c.profile.name; });
       for (const m of (v.messages || [])) {

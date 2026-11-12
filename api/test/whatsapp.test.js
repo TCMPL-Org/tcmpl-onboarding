@@ -191,3 +191,13 @@ test('opening template carries the offer letter PDF and the candidate details (n
     for (const k of ['WHATSAPP_TEMPLATE', 'WHATSAPP_TEMPLATE_LANG', 'WHATSAPP_TEMPLATE_PARAMS', 'WHATSAPP_TEMPLATE_HEADER']) delete process.env[k];
   }
 });
+
+test('inbound messages to another number in the same WhatsApp account are ignored', () => {
+  const wa = require('../src/lib/whatsapp');
+  const old = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  process.env.WHATSAPP_PHONE_NUMBER_ID = '111';
+  const body = n => ({ entry: [{ changes: [{ value: { metadata: { phone_number_id: n }, messages: [{ id: 'm', from: '919800000000', type: 'text', text: { body: 'hi' } }] } }] }] });
+  assert.equal(wa.parseInbound(body('111')).length, 1);
+  assert.equal(wa.parseInbound(body('222')).length, 0);
+  if (old === undefined) delete process.env.WHATSAPP_PHONE_NUMBER_ID; else process.env.WHATSAPP_PHONE_NUMBER_ID = old;
+});
