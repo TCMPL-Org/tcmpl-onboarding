@@ -1,7 +1,7 @@
 'use strict';
 const { app } = require('@azure/functions');
 const handlers = require('../lib/handlers');
-const { getUser } = require('../lib/auth');
+const { guard } = require('../lib/access');
 
 // Signed-in HR actions for induction:
 //   POST /api/induction/send    { candidateId, itemId }             -> send one milestone now
@@ -9,15 +9,19 @@ const { getUser } = require('../lib/auth');
 //   GET  /api/induction/file?id=                                    -> open an uploaded file
 app.http('induction', {
   methods: ['GET', 'POST'],
-  authLevel: 'anonymous', // access is enforced by Static Web Apps sign-in + getUser()
+  authLevel: 'anonymous', // signed-in users on the app's user list only (lib/access.js)
   route: 'induction/{action}',
   handler: async (request) => {
-    const user = getUser(request.headers);
-    if (request.method === 'GET' && request.params.action === 'file') return handlers.contentFile({ id: request.query.get('id'), user });
+    if (request.method === 'GET' && request.params.action === 'file') {
+      const g = await guard(request, null);
+      return g.response || handlers.contentFile({ id: request.query.get('id'), user: g.user });
+    }
     if (request.method !== 'POST') return { status: 405, jsonBody: { error: 'method_not_allowed' } };
     let body;
     try { body = await request.json(); } catch { return { status: 400, jsonBody: { error: 'invalid_json' } }; }
-    return handlers.inductionAction({ action: request.params.action, body, user });
+    const g = await guard(request, body);
+    if (g.response) return g.response;
+    return handlers.inductionAction({ action: request.params.action, body, user: g.user });
   }
 });
 

@@ -76,6 +76,8 @@ async function startForOffer(p, user) {
   if (!store) return { status: 503, body: { error: 'database_not_configured' } };
   const phone = wa.normalizePhone(p && p.mobile);
   if (!phone) return { status: 400, body: { error: 'valid_mobile_required' } };
+  const clientId = str(p.client, 100) || (p.profile && str(p.profile.client, 100));
+  if (clientId && !(await modules.enabled(store, clientId, 'onboarding'))) return { status: 403, body: { error: 'onboarding_off', detail: 'Onboarding is switched off for this client (Client setup → Modules).' } };
   const candidateId = wa.candidateIdFor(phone);
   const existing = await store.get('candidates', candidateId);
   const prev = (existing && existing.data) || {};

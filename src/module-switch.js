@@ -26,6 +26,8 @@ function style() {
 .md-switch button[aria-pressed=true]{background:var(--teal);color:#fff}
 body.md-exit header nav.tabs,body.md-exit main.wrap>section.tab{display:none!important}
 body:not(.md-exit) #exitRoot{display:none}
+body.md-onb-off:not(.md-exit) header nav.tabs,body.md-onb-off:not(.md-exit) main.wrap>section.tab:not(#tab-config){display:none!important}
+body:not(.md-onb-off) #onbOff,body.md-exit #onbOff{display:none}
 #exitRoot{padding-top:12px}`;
   document.head.append(st);
 }
@@ -34,6 +36,11 @@ async function loadMods() {
   const r = await post('/api/modules/get', { client: clientId() });
   mods = r.ok && r.body && r.body.modules ? r.body.modules : { onboarding: true, exit: false };
   renderCard();
+  // Onboarding switched off for this client: its screens are hidden (Client setup stays reachable for admins).
+  document.body.classList.toggle('md-onb-off', mods.onboarding === false);
+  const o = $('#onbOff');
+  if (o) o.innerHTML = mods.onboarding === false ? `<div class="card" style="max-width:640px"><h3 style="margin:0 0 6px">Onboarding is off for ${esc(clientLabel())}</h3>
+    <p class="note" style="margin:0">Nothing is shown or sent for onboarding until an admin switches it on (Admin → Clients and modules).${mods.exit ? ' Exit is on: use the Exit switch at the top.' : ''}</p></div>` : '';
   return mods;
 }
 
@@ -41,15 +48,22 @@ function renderCard() {
   const c = $('#mdCard'); if (!c) return;
   $('#mdClient').textContent = clientLabel();
   $('#mdExit').checked = Boolean(mods.exit);
+  const on = $('#mdOnb'); if (on) on.checked = mods.onboarding !== false;
+  const admin = isAdmin();
+  ['#mdExit', '#mdOnb'].forEach(q => { const el = $(q); if (el) el.disabled = !admin; });
+  const n = $('#mdAdminNote'); if (n) n.hidden = admin;
 }
+const isAdmin = () => !window.tcmplAccess || window.tcmplAccess.role === 'admin';
 
-async function saveExit(on) {
-  const r = await post('/api/modules/save', { client: clientId(), exit: on });
+async function saveMods(patch) {
+  const r = await post('/api/modules/save', Object.assign({ client: clientId() }, patch));
   if (r.ok && r.body && r.body.modules) mods = r.body.modules;
-  renderCard();
-  const s = $('#mdState'); if (s) s.textContent = r.ok ? `Saved · Exit is ${mods.exit ? 'on' : 'off'} for ${clientLabel()}` : 'Not saved.';
+  await loadMods();
+  const s = $('#mdState'); if (s) s.textContent = r.ok ? `Saved · Onboarding ${mods.onboarding !== false ? 'on' : 'off'}, Exit ${mods.exit ? 'on' : 'off'} for ${clientLabel()}` : (r.status === 403 ? 'Only admins can change modules.' : 'Not saved.');
   return r.ok;
 }
+const saveExit = on => saveMods({ exit: on });
+window.tcmplModules = { reload: () => loadMods(), save: saveMods };
 
 function setBrand(exit) {
   const h = $('header .brandtxt h1'), sp = $('header .brandtxt span');
@@ -77,6 +91,7 @@ async function showExit() {
     off.innerHTML = `<div class="card" style="max-width:640px"><h3 style="margin:0 0 6px">Exit is off for ${esc(clientLabel())}</h3>
       <p class="note" style="margin:0 0 12px">Nothing is shown or sent for exits until Exit is switched on for this client. You can also do this in Onboarding → Client setup → Modules.</p>
       <button class="btn primary small" id="mdTurnOn" type="button">Switch Exit on for ${esc(clientLabel())}</button></div>`;
+    if (!isAdmin()) $('#mdTurnOn').hidden = true;
     $('#mdTurnOn').onclick = async () => { if (await saveExit(true)) showExit(); };
     return;
   }
@@ -104,17 +119,22 @@ function mount() {
   root.id = 'exitRoot';
   root.innerHTML = '<div id="exitOff" hidden></div><div id="exitApp" hidden></div>';
   main.prepend(root);
+  const off = document.createElement('section');
+  off.id = 'onbOff';
+  main.prepend(off);
 
   const card = document.createElement('div');
   card.id = 'mdCard'; card.className = 'card'; card.style.marginBottom = '16px';
   card.innerHTML = `<h3 style="margin:0 0 4px">Modules · <span id="mdClient"></span></h3>
     <p class="note" style="margin:0 0 10px">Which agents run for this client. A module that is off is hidden for the client and sends nothing.</p>
-    <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" checked disabled> Onboarding (offer to Day 90)</label>
+    <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="mdOnb"> Onboarding (offer to Day 90)</label>
     <label style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="checkbox" id="mdExit"> Exit (resignation to alumni)</label>
+    <p class="note" id="mdAdminNote" hidden style="margin:6px 0 0">Only admins can change modules.</p>
     <p class="note" id="mdState" style="margin:6px 0 0"></p>`;
   const intro = cfg.querySelector('.intro');
   if (intro) intro.after(card); else cfg.prepend(card);
   $('#mdExit').onchange = e => saveExit(e.target.checked);
+  $('#mdOnb').onchange = e => saveMods({ onboarding: e.target.checked });
 
   const sel = $('#clientSel');
   if (sel) sel.addEventListener('change', () => setTimeout(() => { loadMods(); if (mode === 'exit') showExit(); }, 80));

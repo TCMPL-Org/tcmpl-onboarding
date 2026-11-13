@@ -14,6 +14,7 @@ const documents = require('./documents');
 const { docintelConfigured } = require('./docintel');
 const { storageConfigured } = require('./blob');
 const modules = require('./modules');
+const access = require('./access');
 
 const MAX_DOC_BYTES = 1800000; // Cosmos DB items are limited to 2 MB
 
@@ -28,7 +29,7 @@ async function data({ method, col, id, body, user }) {
   if (!user) return json(401, { error: 'sign_in_required' });
   if (!validCol(col)) return json(404, { error: 'unknown_collection' });
   if (id !== undefined && id !== null && id !== '' && !validId(id)) return json(400, { error: 'bad_id' });
-  if (col === 'letters') return json(403, { error: 'not_available' });
+  if (col === 'letters' || col === 'users') return json(403, { error: 'not_available' }); // users: only through /api/access
   if ((col === 'messages' || col === 'documents' || col === 'content') && method !== 'GET') return json(403, { error: 'read_only' });
   // Module switches and Exit records change only through their own routes (/api/modules, /api/exit).
   if ((col === 'modules' || col.startsWith('exit_')) && method !== 'GET') return json(403, { error: 'read_only' });
@@ -37,14 +38,23 @@ async function data({ method, col, id, body, user }) {
   if (!store) return json(503, { error: 'database_not_configured' });
 
   try {
+    // HR users limited to some clients: reads are filtered, writes to other clients refused; new clients only by admins.
+    if (method !== 'GET' && user.role && !access.allClients(user)) {
+      const target = col === 'candidates' ? ((await store.get(col, id)) || {}).data : null;
+      const clientId = col === 'candidates' ? (target && target.profile && target.profile.client) || (body && body.profile && body.profile.client) : ['clients', 'journeys', 'modules', 'facts', 'plans'].includes(col) ? id : '';
+      if (clientId !== '' && !access.canClient(user, clientId)) return json(403, { error: 'client_not_allowed' });
+    }
+    if (col === 'clients' && method !== 'GET' && user.role && user.role !== 'admin' && (method === 'DELETE' || !(await store.get(col, id)))) return json(403, { error: 'admin_only' });
     if (method === 'GET') {
       // The full bank account number stays on the server.
       const safe = r => (col === 'documents' && r && r.data && r.data.account) ? Object.assign({}, r, { data: Object.assign({}, r.data, { account: undefined }) }) : r;
       if (id) {
         const rec = await store.get(col, id);
+        if (rec && user.role && !(await access.filterItems(user, col, [rec])).length) return json(403, { error: 'client_not_allowed' });
         return rec ? json(200, safe(rec)) : json(404, { error: 'not_found' });
       }
-      return json(200, { items: (await store.list(col)).map(safe) });
+      const items = (await store.list(col)).map(safe);
+      return json(200, { items: user.role ? await access.filterItems(user, col, items) : items });
     }
     if (!id) return json(400, { error: 'id_required' });
     if (method === 'PUT') {

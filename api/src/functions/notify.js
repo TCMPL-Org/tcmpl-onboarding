@@ -1,7 +1,7 @@
 'use strict';
 const { app } = require('@azure/functions');
 const handlers = require('../lib/handlers');
-const { getUser } = require('../lib/auth');
+const { guard } = require('../lib/access');
 
 // Signed-in HR actions:
 //   POST /api/notify/owner      { candidateId, k, task, owner|to, cc, subject, body, dueDate } -> email a Day-1 task to its owner
@@ -10,12 +10,14 @@ const { getUser } = require('../lib/auth');
 //   POST /api/notify/jump|run|realtime|reset { candidateId, day?, time? }                      -> Walkthrough clock
 app.http('notify', {
   methods: ['POST'],
-  authLevel: 'anonymous', // access is enforced by Static Web Apps sign-in + getUser()
+  authLevel: 'anonymous', // signed-in users on the app's user list only (lib/access.js)
   route: 'notify/{action}',
   handler: async (request) => {
     let body;
     try { body = await request.json(); } catch { return { status: 400, jsonBody: { error: 'invalid_json' } }; }
-    return handlers.notifyAction({ action: request.params.action, body, user: getUser(request.headers) });
+    const g = await guard(request, body);
+    if (g.response) return g.response;
+    return handlers.notifyAction({ action: request.params.action, body, user: g.user });
   }
 });
 

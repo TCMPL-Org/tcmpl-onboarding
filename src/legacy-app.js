@@ -944,7 +944,7 @@ function cfgStatus(t){ const e=$('#cfgStatus'); if(e) e.textContent=t; }
 function saveCfg(){ if(isDefC()) return; cfgStatus('Saving…'); clearTimeout(cfgTimer); cfgTimer=setTimeout(async()=>{ const data={ov:JSON.parse(JSON.stringify(client.ov)),client:client.id,label:client.label,updated:new Date().toISOString()};
   if(db){ try{ await db.collection('clients').doc(client.id).set(data); publishFacts(); cfgStatus('Saved · shared with everyone signed in'); }catch(e){ cfgStatus('Not saved: you may have view-only access'); } } else cfgStatus('Saved for this session'); },600); }
 function cfgChanged(rebuildJourney){ saveCfg(); applyClient(false); if(rebuildJourney&&S){ buildPlan(); renderTimeline(); S.docsTotal=cv('docs').split(';').filter(x=>x.trim()).length; renderBrain(); } }
-STORE_HOOKS.push(k=>{ if(k!=='clients') return; Object.values(store.clients||{}).forEach(d=>{ let c=CLIENTS.find(x=>x.id===d.id); if(!c&&d.label&&d.id){ c={id:d.id,label:d.label,ov:{}}; CLIENTS.push(c); addClientOption(c); } if(c&&d.label&&c.id!=='default') { c.label=d.label; const o=[...$('#clientSel').options].find(x=>x.value===c.id); if(o) o.textContent=d.label; } if(c&&d.ov) c.ov=JSON.parse(JSON.stringify(d.ov)); }); const inCfg=document.activeElement&&$('#tab-config').contains(document.activeElement); if(!$('#tab-config').hidden&&!inCfg) renderConfig(); applyClient(false); if(S){ buildPlan(); renderTimeline(); } });
+STORE_HOOKS.push(k=>{ if(k!=='clients') return; Object.values(store.clients||{}).forEach(d=>{ let c=CLIENTS.find(x=>x.id===d.id); if(!c&&d.label&&d.id){ c={id:d.id,label:d.label,ov:{}}; CLIENTS.push(c); addClientOption(c); } if(c&&d.label&&c.id!=='default') { c.label=d.label; const o=[...$('#clientSel').options].find(x=>x.value===c.id); if(o) o.textContent=d.label; } if(c&&c.id!=='default'){ const inact=d.active===false; const o=[...$('#clientSel').options].find(x=>x.value===c.id); c.inactive=inact; if(inact&&o){ const wasSel=$('#clientSel').value===c.id; o.remove(); if(wasSel){ $('#clientSel').value='default'; $('#clientSel').dispatchEvent(new Event('change')); } } else if(!inact&&!o) addClientOption(c); } if(c&&d.ov) c.ov=JSON.parse(JSON.stringify(d.ov)); }); const inCfg=document.activeElement&&$('#tab-config').contains(document.activeElement); if(!$('#tab-config').hidden&&!inCfg) renderConfig(); applyClient(false); if(S){ buildPlan(); renderTimeline(); } });
 const HRMS=['HROne','Darwinbox','Keka','greytHR','Zoho People','Adrenalin','PeopleStrong','SAP SuccessFactors','Oracle HCM','Other'];
 const INT_TXT={api:h=>`The agent reads candidate and employee data from ${h} and writes confirmed joining data back through its API. Where ${h} has no API for a task, it falls back to file exchange for that task.`,
   file:()=>'HR or TCMPL uploads CSV or Excel files (candidates, employee master) and downloads confirmed joining data as an import file for any HRMS. A daily exchange can be scheduled.',
@@ -1166,15 +1166,19 @@ $('#cfgUp').onchange=async e=>{ const f=e.target.files[0]; e.target.value=''; if
 function addClientOption(c){ const o=document.createElement('option'); o.value=c.id; o.textContent=c.label; $('#clientSel').append(o); }
 CLIENTS.forEach(addClientOption);
 // New client: starts on the TCMPL default with its own name; everything else is set on this tab.
-async function addClient(){
-  const name=(window.prompt('New client name (e.g. Acme Industries Pvt. Ltd.)')||'').trim(); if(!name) return;
+async function addClient(given){
+  const name=(typeof given==='string'&&given.trim())||(window.prompt('New client name (e.g. Acme Industries Pvt. Ltd.)')||'').trim(); if(!name) return null;
   let id=name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40)||'client'; const base=id; let n=2; while(CLIENTS.some(c=>c.id===id)) id=base+'-'+(n++);
   const short=name.replace(/\s+(pvt\.?|private|ltd\.?|limited|llp|inc\.?)\b.*$/i,'').trim()||name;
   const c={id,label:name,ov:{company:name,short,agentName:short+' HR',initials:short.split(/\s+/).map(w=>w[0]).join('').slice(0,2).toUpperCase()}};
   CLIENTS.push(c); addClientOption(c); $('#clientSel').value=id; $('#clientSel').dispatchEvent(new Event('change')); showTab('config');
   if(db){ try{ await db.collection('clients').doc(id).set({ov:c.ov,client:id,label:name,updated:new Date().toISOString()}); publishFacts(); toast(`${name} added on the TCMPL default. Fill in its setup on this tab, then Journey setup, Email settings, Joining forms, Day-1 readiness and Induction.`); }catch(e){ toast('Client added for this session only: saving needs edit access.'); } }
   else toast(`${name} added for this session (no database).`);
+  return id;
 }
+// Admin panel (admin-live.js): the client list and adding a client by name.
+window.tcmplClients=()=>CLIENTS.map(c=>({id:c.id,label:c.label,inactive:!!c.inactive}));
+window.tcmplAddClient=name=>addClient(name);
 function renameClient(){
   if(isDefC()){ toast('The TCMPL default template cannot be renamed.'); return; }
   const name=(window.prompt('Client name',client.label)||'').trim(); if(!name||name===client.label) return;

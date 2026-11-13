@@ -27,12 +27,12 @@ async function settings(store, clientId) {
 
 async function enabled(store, clientId, name) { return Boolean((await settings(store, clientId))[name]); }
 
-// Only the Exit switch can be changed for now; Onboarding stays on for every client.
+// Onboarding and Exit can each be switched on or off per client (admins only, checked in httpAction).
 async function save(store, clientId, patch, user) {
   const id = cleanClient(clientId);
   if (!id) return { status: 400, body: { error: 'client_required' } };
   const cur = await settings(store, id);
-  if (patch && typeof patch.exit === 'boolean') cur.exit = patch.exit;
+  for (const k of Object.keys(DEFAULTS)) if (patch && typeof patch[k] === 'boolean') cur[k] = patch[k];
   await store.put('modules', id, { client: id, modules: cur, updated: new Date().toISOString() }, user || SYSTEM);
   return { status: 200, body: { client: id, modules: cur } };
 }
@@ -71,9 +71,17 @@ async function httpAction({ action, body, user }) {
   if (!store) return { status: 503, jsonBody: { error: 'database_not_configured' } };
   const client = body && body.client;
   if (action === 'get') return { status: 200, jsonBody: { client: cleanClient(client) || 'default', modules: await settings(store, client), loaded: names() } };
+  if (action === 'list') {
+    // Every client's switches in one go (admin panel).
+    const out = {};
+    for (const r of await store.list('modules')) if (r.data && r.data.modules) out[r.id] = Object.assign({}, DEFAULTS, r.data.modules);
+    return { status: 200, jsonBody: { defaults: DEFAULTS, clients: out } };
+  }
   if (action === 'save') {
-    const exit = body && typeof body.exit === 'boolean' ? body.exit : undefined;
-    const r = await save(store, client, { exit }, user);
+    if (user.role && user.role !== 'admin') return { status: 403, jsonBody: { error: 'admin_only' } };
+    const patch = {};
+    for (const k of Object.keys(DEFAULTS)) if (body && typeof body[k] === 'boolean') patch[k] = body[k];
+    const r = await save(store, client, patch, user);
     return { status: r.status, jsonBody: r.body };
   }
   return { status: 404, jsonBody: { error: 'unknown_action' } };

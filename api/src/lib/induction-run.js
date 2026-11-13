@@ -223,10 +223,15 @@ async function tick(realNow = Date.now(), budgetMs = 35000) {
   if (!store || !wa.waConfigured()) return { ok: false, reason: 'not_configured' };
   const started = Date.now();
   const plans = {};
+  const onFor = {}; // client -> Onboarding switched on? (Client setup → Modules)
+  const modules = require('./modules');
   let candidates = 0, sent = 0;
   for (const rec of await store.list('candidates')) {
     if (Date.now() - started > budgetMs) break;
     const cand = Object.assign({}, rec.data);
+    const cl = (cand.profile && cand.profile.client) || '';
+    if (cl && !(cl in onFor)) onFor[cl] = await modules.enabled(store, cl, 'onboarding').catch(() => true);
+    if (cl && onFor[cl] === false) continue;
     const before = JSON.stringify([cand.induction || null, cand.readiness || null, cand.checkins || null, (cand.handovers || []).length]);
     const n = await runCandidate(store, rec.id, cand, plans, realNow);
     sent += n;

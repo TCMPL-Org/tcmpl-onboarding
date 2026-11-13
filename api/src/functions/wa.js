@@ -1,7 +1,7 @@
 'use strict';
 const { app } = require('@azure/functions');
 const handlers = require('../lib/handlers');
-const { getUser } = require('../lib/auth');
+const { guard } = require('../lib/access');
 
 // Signed-in HR actions:
 //   POST /api/wa/start  { offer + candidate details + facts }  -> register candidate, send opening template
@@ -9,12 +9,14 @@ const { getUser } = require('../lib/auth');
 //   POST /api/wa/push   { candidateId, touchpoint, items }      -> send a prepared journey touchpoint / offer letter
 app.http('wa', {
   methods: ['POST'],
-  authLevel: 'anonymous', // access is enforced by Static Web Apps sign-in + getUser()
+  authLevel: 'anonymous', // signed-in users on the app's user list only (lib/access.js)
   route: 'wa/{action}',
   handler: async (request) => {
     let body;
     try { body = await request.json(); } catch { return { status: 400, jsonBody: { error: 'invalid_json' } }; }
-    const user = getUser(request.headers);
+    const g = await guard(request, body);
+    if (g.response) return g.response;
+    const user = g.user;
     if (request.params.action === 'start') return handlers.waStart({ body, user });
     if (request.params.action === 'send') return handlers.waSend({ body, user });
     if (request.params.action === 'push') return handlers.waPush({ body, user });
