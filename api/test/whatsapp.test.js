@@ -162,6 +162,7 @@ test('offer letter is kept in the database and sent later even if the first uplo
   assert.equal(before.letterMediaId, '');
   // token fixed: "Send offer letter again" works without the Offer desk
   mockFetch(); sent.length = 0;
+  await getStore().put('candidates', 'wa-917623026914', Object.assign({}, before, { lastInboundAt: new Date().toISOString() }), user); // the candidate has written
   const r = await handlers.waPush({ user, body: { candidateId: 'wa-917623026914', items: [{ type: 'letter' }] } });
   assert.equal(r.status, 200);
   assert.equal(sent[0].type, 'document');

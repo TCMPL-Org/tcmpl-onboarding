@@ -123,7 +123,10 @@ async function docsRequest({ body, user }) {
   if (!wa.waConfigured()) return json(503, { error: 'whatsapp_not_configured' });
   const id = String((body && body.candidateId) || '');
   if (!/^wa-\d{11,15}$/.test(id)) return json(400, { error: 'candidate_required' });
-  const r = await documents.request(store, id, user);
+  const crec = await store.get('candidates', id);
+  const r = crec && !conversations.windowOpen(crec.data)
+    ? { status: 409, body: { error: 'window_closed' } }
+    : await documents.request(store, id, user);
   return heldOr(r, 'docs', { candidateId: id }, user);
 }
 

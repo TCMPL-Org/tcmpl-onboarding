@@ -43,6 +43,14 @@ function niceDate(iso) {
   return `${m[3]} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][+m[2] - 1]} ${m[1]}`;
 }
 
+// WhatsApp accepts normal messages only within 24 hours of the candidate's last message.
+// Outside that window Meta still answers "accepted" and then drops the message, so check first.
+const WINDOW_MS = 24 * 3600 * 1000 - 10 * 60 * 1000; // 10-minute safety margin
+function windowOpen(cand) {
+  const t = Date.parse((cand && cand.lastInboundAt) || '');
+  return Number.isFinite(t) && Date.now() - t < WINDOW_MS;
+}
+
 const MAX_PDF_B64 = 1300000; // ~1 MB PDF; fits in one database record
 const MEDIA_MAX_AGE_MS = 25 * 24 * 3600 * 1000; // WhatsApp keeps uploaded media for 30 days
 
@@ -215,6 +223,7 @@ async function sendManual(p, user) {
   const rec = await store.get('candidates', candidateId);
   if (!rec) return { status: 404, body: { error: 'candidate_not_found' } };
   if (!wa.waConfigured()) return { status: 503, body: { error: 'whatsapp_not_configured' } };
+  if (!windowOpen(rec.data)) return { status: 409, body: { sent: false, error: 'window_closed' } };
   try {
     const sent = await wa.sendText(rec.data.phone, text);
     await saveMessage(store, newId('o'), { candidateId, direction: 'out', text, waId: sent.id || '', by: user.name, source: 'hr', kind: 'text' }, user);
@@ -260,7 +269,32 @@ async function pushItems(p, user) {
       options: isOffer ? [] : opts, offer: Boolean(isOffer), attachments: att
     });
   }
-  for (const it of (viaWa ? items : [])) {
+  const lt0 = items.find(it => it && it.type === 'letter');
+  const closed = viaWa && !windowOpen(cand);
+  if (closed) {
+    // Window closed. The offer goes as the approved offer template (letter attached), which WhatsApp
+    // always delivers; anything else is held and sent when the candidate replies to the reminder.
+    if (!lt0) return { status: 409, body: { sent: 0, emailed, error: 'window_closed' } };
+    try {
+      if (typeof lt0.pdfBase64 === 'string' && lt0.pdfBase64.length > 100 && lt0.pdfBase64.length < MAX_PDF_B64) {
+        cand.letterFile = str(lt0.filename, 150) || cand.letterFile || 'Offer_Letter.pdf';
+        cand.letterProtected = Boolean(lt0.protected);
+        await store.put('letters', candidateId, { pdfBase64: lt0.pdfBase64, filename: cand.letterFile }, user);
+        cand.letterMediaId = ''; cand.letterUploadedAt = ''; cand.hasLetter = true;
+      }
+      const mid = await letterMedia(store, candidateId, cand);
+      if (!mid && wa.templateWantsDocument()) return { status: 400, body: { sent: 0, emailed, error: 'no_offer_letter' } };
+      const pr = cand.profile || {};
+      const r = await wa.sendTemplate(cand.phone, { first: cand.first || pr.first, name: cand.name, company: cand.company || cand.clientLabel, role: cand.role || pr.role, doj: niceDate(cand.doj || pr.doj), agent: cand.agentName }, mid ? { id: mid, filename: cand.letterFile } : null);
+      if (r.withDocument) cand.letterSent = true;
+      await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: `[Template: ${r.template}]${r.withDocument ? ' with offer letter PDF' : ''}`, waId: r.id || '', by: user.name, source: 'journey', touchpoint: label, kind: 'template' }, user);
+      sent = items.length; // the template carries the whole offer (text, letter and Accept / Questions / Decline)
+    } catch (e) {
+      await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: '[Template not sent]', error: e.message, source: 'journey', touchpoint: label, kind: 'template' }, user);
+      return { status: 502, body: { sent: 0, emailed, error: 'whatsapp_send_failed', detail: e.message } };
+    }
+  }
+  for (const it of (viaWa && !closed ? items : [])) {
     try {
       if (it && it.type === 'letter') {
         if (typeof it.pdfBase64 === 'string' && it.pdfBase64.length > 100 && it.pdfBase64.length < MAX_PDF_B64) {
@@ -320,6 +354,7 @@ async function askDetails(p, user) {
   if (!cand) return { status: 404, body: { error: 'candidate_not_found' } };
   const q = profile.start(cand, { full: Boolean(p.full), forms: Array.isArray(p.forms) ? p.forms.map(String).slice(0, 5) : undefined });
   if (!q) { await store.put('candidates', candidateId, cand, user); return { status: 200, body: { sent: 0, nothingMissing: true } }; }
+  if (!windowOpen(cand)) return { status: 409, body: { sent: 0, error: 'window_closed' } };
   try {
     const r = q.buttons ? await wa.sendButtons(cand.phone, q.text, q.buttons) : await wa.sendText(cand.phone, q.text);
     await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: q.buttons ? `${q.text}\n[Buttons: ${q.buttons.join(' | ')}]` : q.text, waId: r.id || '', by: user.name, source: 'journey', kind: q.buttons ? 'interactive' : 'text' }, user);
@@ -367,6 +402,7 @@ async function sendForms(p, user) {
       attachments: files.map(x => ({ name: (str(x.filename, 120) || 'Joining_form.pdf').replace(/[^\w.-]+/g, '_'), contentType: 'application/pdf', base64: x.pdfBase64 }))
     });
   }
+  if (!windowOpen(cand)) return { status: 409, body: { sent: 0, error: 'window_closed' } };
   try {
     for (const x of files) {
       const name = (str(x.filename, 120) || 'Joining_form.pdf').replace(/[^\w.-]+/g, '_');
@@ -470,4 +506,4 @@ async function replayHeld(store, candidateId) {
   return held.length;
 }
 
-module.exports = { hold, replayHeld, withLatestFacts, startForOffer, handleInbound, sendManual, pushItems, askDetails, saveForms, sendForms, missingDetails };
+module.exports = { windowOpen, hold, replayHeld, withLatestFacts, startForOffer, handleInbound, sendManual, pushItems, askDetails, saveForms, sendForms, missingDetails };

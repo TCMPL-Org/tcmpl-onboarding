@@ -118,7 +118,7 @@ test('candidate gets an email copy of WhatsApp sends: offer letter attached with
   wa.sendDocument = async () => ({ id: 'w' });
   const id = 'wa-917000000077';
   await store.put('journeys', 'mirrorclient', { email: { replyTo: 'hr@example.com', cc: 'clienthr@example.com' } }, user);
-  await store.put('candidates', id, { phone: '917000000077', name: 'Ravi Kumar', first: 'Ravi', email: 'ravi@example.com', company: 'Northpeak', letterProtected: true, letterFile: 'Offer.pdf', profile: { doj: '2026-12-01', client: 'mirrorclient' } }, user);
+  await store.put('candidates', id, { lastInboundAt: new Date().toISOString(), phone: '917000000077', name: 'Ravi Kumar', first: 'Ravi', email: 'ravi@example.com', company: 'Northpeak', letterProtected: true, letterFile: 'Offer.pdf', profile: { doj: '2026-12-01', client: 'mirrorclient' } }, user);
   await store.put('letters', id, { pdfBase64: 'JVBERi0xLjQK'.repeat(20), filename: 'Offer.pdf' }, user);
   sentMail.length = 0;
   let r = await handlers.waPush({ body: { candidateId: id, touchpoint: 'Offer letter', touchpointKey: 'offer', items: [{ type: 'letter' }, { type: 'text', text: 'Here is your offer.', buttons: ['Accept offer', 'I have questions', 'Decline'] }] }, user });

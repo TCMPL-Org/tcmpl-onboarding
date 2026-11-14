@@ -20,7 +20,7 @@ test('HR saves, sends and approves joining forms', async () => {
   });
   const store = getStore();
   const id = 'wa-917000000009';
-  await store.put('candidates', id, { phone: '917000000009', name: 'Jeet Pawar' }, user);
+  await store.put('candidates', id, { phone: '917000000009', name: 'Jeet Pawar', lastInboundAt: new Date().toISOString() }, user);
 
   let r = await handlers.formsAction({ action: 'details', body: { candidateId: id }, user });
   assert.equal(r.status, 200);

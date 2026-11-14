@@ -60,7 +60,8 @@ test('messages are held while the 24-hour window is closed and sent when the can
   r = await handlers.waPush({ body: { candidateId: id, items: [{ type: 'text', text: 'Day-1 kit' }], touchpoint: 'Day-1 kit', touchpointKey: 'day1kit' }, user: { name: 'hr@x' } });
   assert.equal(r.status, 202);
   assert.equal((await store.get('candidates', id)).data.held.length, 2);
-  open = true;
+  open = true; // the candidate wrote: the window is open again
+  await store.put('candidates', id, Object.assign({}, (await store.get('candidates', id)).data, { lastInboundAt: new Date().toISOString() }), { name: 't' });
   const n = await conversations.replayHeld(store, id);
   assert.equal(n, 2);
   assert.deepEqual(sent, ['Your joining time is 9:30', 'Day-1 kit']);
