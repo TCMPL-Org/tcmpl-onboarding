@@ -35,7 +35,7 @@ test('signed links: valid, tamper-proof', () => {
 test('owner email with CC and settings, then one-click Mark as done', async () => {
   const store = getStore();
   const id = 'wa-917000000011';
-  await store.put('candidates', id, { phone: '917000000011', name: 'Asha Rao', email: 'asha@mail.com', profile: { client: 'northpeak', doj: '2026-12-01', first: 'Asha' } }, user);
+  await store.put('candidates', id, { lastInboundAt: new Date().toISOString(), phone: '917000000011', name: 'Asha Rao', email: 'asha@mail.com', profile: { client: 'northpeak', doj: '2026-12-01', first: 'Asha' } }, user);
   await handlers.notifyAction({ action: 'settings', body: { client: 'northpeak', replyTo: 'HR <hr@tcmpl.com>', cc: 'clienthr@client.com' }, user });
   const r = await handlers.notifyAction({ action: 'owner', body: { candidateId: id, k: 'laptop', task: 'Laptop and system access', owner: 'Rohit Verma, IT <rohit@client.com>', cc: 'mgr@client.com', subject: 'New colleague: laptop', body: 'Please arrange a laptop.', dueDate: '2026-11-24' }, user });
   assert.equal(r.status, 200);
@@ -84,7 +84,7 @@ test('walkthrough: jump to D-1 reminds the owner, D+1 escalates to HR; D-2 sends
 test('journey check-ins: saved setup, walkthrough jump runs resignation check, manager email answer by link', async () => {
   const store = getStore();
   const id = 'wa-917000000099';
-  await store.put('candidates', id, { phone: '917000000099', name: 'Asha Rao', email: 'asha@example.com', profile: { doj: '2026-12-01', client: 'ckclient', first: 'Asha' } }, user);
+  await store.put('candidates', id, { lastInboundAt: new Date().toISOString(), phone: '917000000099', name: 'Asha Rao', email: 'asha@example.com', profile: { doj: '2026-12-01', client: 'ckclient', first: 'Asha' } }, user);
   let r = await handlers.checkinAction({ action: 'setup', body: { client: 'ckclient' }, user });
   assert.equal(r.status, 200);
   const setup = r.jsonBody.setup;

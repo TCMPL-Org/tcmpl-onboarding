@@ -21,13 +21,14 @@ const handlers = require('../src/lib/handlers');
 const user = { id: 'u1', name: 'hr@example.com', roles: ['authenticated'] };
 const PDF = Buffer.from('%PDF-1.4 ' + 'x'.repeat(300)).toString('base64');
 
-function mockMeta() {
+function mockMeta(missing = []) {
   const calls = [];
   const real = global.fetch;
   global.fetch = async (url, opts) => {
     if (String(url).endsWith('/media')) { calls.push({ media: true }); return { ok: true, json: async () => ({ id: 'MEDIA1' }) }; }
     const body = JSON.parse(opts.body);
     calls.push(body);
+    if (body.template && missing.includes(body.template.name)) return { ok: false, status: 404, json: async () => ({ error: { message: 'Template name does not exist in the translation', code: 132001 } }) };
     return { ok: true, json: async () => ({ messages: [{ id: 'wamid.' + calls.length }] }) };
   };
   return { calls, restore: () => { global.fetch = real; } };
@@ -86,4 +87,38 @@ test('other messages with the window closed are held and the reminder template g
     const rec = await getStore().get('candidates', 'wa-917623026916');
     assert.equal(rec.data.held.length, 1);
   } finally { m.restore(); }
+});
+
+test('journey steps use their own approved template when the window is closed', async () => {
+  const m = mockMeta();
+  try {
+    await seed('wa-917623026917', '');
+    const r = await handlers.waPush({ body: { candidateId: 'wa-917623026917', touchpoint: 'Resignation check', touchpointKey: 'resign', items: [{ type: 'text', text: 'Have you resigned?', buttons: ['Yes, submitted', 'Not yet'] }] }, user });
+    assert.equal(r.status, 202);
+    assert.equal(r.jsonBody.template, 'resignation_check');
+    const t = m.calls.find(c => c.type === 'template');
+    assert.deepEqual(t.template.components[0].parameters.map(p => p.text), ['Anjali', 'Northpeak']);
+  } finally { m.restore(); }
+});
+
+test('a step template that is not approved yet falls back to the general reminder', async () => {
+  const m = mockMeta(['joining_details']);
+  try {
+    await seed('wa-917623026918', '');
+    const r = await handlers.waPush({ body: { candidateId: 'wa-917623026918', touchpoint: 'Day-1 kit', touchpointKey: 'day1kit', items: [{ type: 'text', text: 'Reporting 9:30 at Baner' }] }, user });
+    assert.equal(r.status, 202);
+    assert.equal(r.jsonBody.template, 'onboarding_pending_step');
+    assert.deepEqual(m.calls.filter(c => c.type === 'template').map(c => c.template.name), ['joining_details', 'onboarding_pending_step']);
+  } finally { m.restore(); }
+});
+
+test('the hourly run sends one reminder per template in 12 hours, not every hour', async () => {
+  const steps = require('../src/lib/step-templates');
+  const cand = {};
+  assert.equal(steps.shouldRemind(cand, 'resign'), true);
+  steps.markReminded(cand, 'resign');
+  assert.equal(steps.shouldRemind(cand, 'resign'), false);
+  assert.equal(steps.shouldRemind(cand, 'docs'), true);
+  assert.equal(steps.templateFor('pulse30'), 'onboarding_checkin');
+  assert.equal(steps.templateFor('cx:abc'), '');
 });

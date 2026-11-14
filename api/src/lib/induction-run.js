@@ -12,6 +12,7 @@ const notify = require('./notify');
 const links = require('./links');
 const emailLib = require('./email');
 const { getStore } = require('./store');
+const steps = require('./step-templates');
 
 const SYSTEM = { name: 'onboarding-agent' };
 const newId = p => `${p}-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
@@ -59,7 +60,7 @@ function windowClosed(e) {
 // Sends messages in order. If WhatsApp refuses because the 24-hour window is closed, the rest are held on the
 // candidate (induction.waiting) and go out when the candidate next writes; an approved "nudge" template
 // (WHATSAPP_NUDGE_TEMPLATE, body {{1}} = first name, {{2}} = what it's about) asks them to reply.
-async function deliver(store, candidateId, cand, msgs, by, about, source = 'induction', noEmail = false) {
+async function deliver(store, candidateId, cand, msgs, by, about, source = 'induction', noEmail = false, stepKey = '') {
   let sent = 0;
   // Email copy of what goes to the candidate (not the agent's conversational replies), files attached.
   if (source !== 'agent' && !noEmail && msgs.length) {
@@ -75,10 +76,13 @@ async function deliver(store, candidateId, cand, msgs, by, about, source = 'indu
     const options = msgs.flatMap(r => r.buttons || []);
     await notify.toCandidate(store, candidateId, cand, { subject: `${String(about || 'Onboarding update').slice(0, 80)} · ${cand.company || cand.clientLabel || ''}`.replace(/ · $/, ''), text, options, attachments: att, kind: source });
   }
+  // Window closed: Meta would accept and then drop normal messages, so hold them and send the step's template.
+  const closed = source !== 'agent' && !steps.windowOpen(cand);
   for (let i = 0; i < msgs.length; i++) {
     const r = msgs[i];
     let waId, text;
     try {
+      if (closed) { const e = new Error('24-hour window closed'); e.detail = { code: 131047 }; throw e; }
       if (r.file) {
         const media = await contentMedia(store, r.file);
         waId = (await wa.sendDocument(cand.phone, media.id, media.name, r.caption || '')).id || '';
@@ -96,16 +100,18 @@ async function deliver(store, candidateId, cand, msgs, by, about, source = 'indu
       if (windowClosed(e)) {
         const ind = cand.induction = Object.assign({ items: {} }, cand.induction);
         ind.waiting = (ind.waiting || []).concat(msgs.slice(i)).slice(-10);
-        const tpl = (process.env.WHATSAPP_NUDGE_TEMPLATE || '').trim();
         let note = 'Held until the candidate next writes (24-hour window closed).';
-        if (tpl) {
+        const key = stepKey || (source === 'induction' ? 'induction' : '');
+        if (steps.shouldRemind(cand, key)) {
           try {
-            const first = (cand.profile && cand.profile.first) || (cand.name || '').split(' ')[0] || 'there';
-            const t = await wa.sendNamedTemplate(cand.phone, tpl, process.env.WHATSAPP_NUDGE_TEMPLATE_LANG || 'en', [first, about || 'your onboarding']);
-            note = 'Sent a reminder template; the message goes out when the candidate replies.';
-            await saveOut(store, candidateId, `[Template ${tpl}] ${about || ''}`, t.id || '', '', by, 'template');
+            const t = await steps.remind(cand, key, about || 'your onboarding');
+            if (t) {
+              steps.markReminded(cand, key);
+              note = `Sent the ${t.template} template; the message goes out when the candidate replies.`;
+              await saveOut(store, candidateId, `[Template: ${t.template}] ${about || ''}`, t.id, '', by, 'template');
+            }
           } catch (te) { note += ' Template failed: ' + te.message; }
-        }
+        } else note += ' Reminder already sent in the last 12 hours.';
         await saveOut(store, candidateId, r.text || (r.file && r.file.name) || '', '', note, by, 'held');
         return { sent, held: msgs.length - i };
       }
@@ -133,11 +139,11 @@ async function runCandidate(store, id, cand, plans, realNow = Date.now()) {
   const now = nowFor(cand, realNow);
   let sends = 0;
   // 1. WhatsApp: Day-1 readiness checks first (time-critical), then induction.
-  let due = readiness.due(cand, now);
-  if (!due.length && plans[clientId]) due = induction.due(cand, plans[clientId], now);
+  let due = readiness.due(cand, now), dueKey = 'day1-check';
+  if (!due.length && plans[clientId]) { due = induction.due(cand, plans[clientId], now); dueKey = 'induction'; }
   const norm = plans[clientId] ? induction.normalizePlan(plans[clientId]) : { items: [] };
   for (const g of due) {
-    await deliver(store, id, cand, g.msgs, SYSTEM, g.msgs[0] && (g.msgs[0].caption || String(g.msgs[0].text || '').split('\n')[0]));
+    await deliver(store, id, cand, g.msgs, SYSTEM, g.msgs[0] && (g.msgs[0].caption || String(g.msgs[0].text || '').split('\n')[0]), 'induction', false, dueKey);
     sends++;
     // A meeting's "did it happen?" also goes to its owner by email, with one-click answers.
     const it = norm.items.find(x => x.id === g.id);
@@ -207,7 +213,7 @@ async function runCandidate(store, id, cand, plans, realNow = Date.now()) {
 async function sendCheckin(store, id, cand, c, by) {
   let n = 0;
   if (c.escalate) return 0; // the new red item is emailed to HR by notify.alertHandovers
-  if (c.wa) { await deliver(store, id, cand, c.wa, by, c.item.title, 'checkin', Boolean(c.email)); n++; }
+  if (c.wa) { await deliver(store, id, cand, c.wa, by, c.item.title, 'checkin', Boolean(c.email), c.item.id); n++; }
   if (c.email) {
     const ok = await notify.auto(store, id, cand, Object.assign({ kind: 'checkin', k: c.key }, c.email));
     const a = cand.checkins && cand.checkins.asks[c.key];
@@ -309,7 +315,7 @@ async function readyAction(action, p, user) {
     if (!wa.waConfigured()) return { status: 503, body: { error: 'whatsapp_not_configured' } };
     const q = readiness.sendNow(cand, str(p.qid, 20));
     if (!q) return { status: 404, body: { error: 'question_not_found' } };
-    const d = await deliver(store, candidateId, cand, q.msgs, user, 'Day-1 check');
+    const d = await deliver(store, candidateId, cand, q.msgs, user, 'Day-1 check', 'induction', false, 'day1-check');
     cand.lastMessageAt = new Date().toISOString();
     await store.put('candidates', candidateId, cand, user);
     if (d.error) return { status: 502, body: { error: 'whatsapp_send_failed', detail: d.error } };

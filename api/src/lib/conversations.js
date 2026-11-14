@@ -16,6 +16,9 @@ const readiness = require('./readiness');
 const checkins = require('./checkins');
 const notify = require('./notify');
 const modules = require('./modules');
+const steps = require('./step-templates');
+// WhatsApp delivers normal messages only within 24 hours of the candidate's last message (see step-templates.js).
+const windowOpen = steps.windowOpen;
 
 const SYSTEM = { name: 'onboarding-agent' };
 
@@ -41,14 +44,6 @@ function niceDate(iso) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
   if (!m) return iso || '';
   return `${m[3]} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][+m[2] - 1]} ${m[1]}`;
-}
-
-// WhatsApp accepts normal messages only within 24 hours of the candidate's last message.
-// Outside that window Meta still answers "accepted" and then drops the message, so check first.
-const WINDOW_MS = 24 * 3600 * 1000 - 10 * 60 * 1000; // 10-minute safety margin
-function windowOpen(cand) {
-  const t = Date.parse((cand && cand.lastInboundAt) || '');
-  return Number.isFinite(t) && Date.now() - t < WINDOW_MS;
 }
 
 const MAX_PDF_B64 = 1300000; // ~1 MB PDF; fits in one database record
@@ -475,18 +470,24 @@ async function hold(candidateId, action, payload, user) {
   const entry = { action, payload, by: user.name, at: new Date().toISOString() };
   if (JSON.stringify(entry).length > 900000) return { status: 409, body: { error: 'window_closed' } };
   cand.held = (cand.held || []).concat([entry]).slice(-10);
-  let nudged = false;
-  const tpl = (process.env.WHATSAPP_NUDGE_TEMPLATE || '').trim();
-  if (tpl && (!cand.nudgedAt || Date.now() - Date.parse(cand.nudgedAt) > 12 * 3600000)) {
+  // The step's own approved template (e.g. resignation_check, documents_request), else the general reminder.
+  const key = action === 'push' ? str(payload && payload.touchpointKey, 60) : { docs: 'docs', details: 'details', forms: 'forms' }[action] || '';
+  const about = str(payload && payload.touchpoint, 80) || 'your onboarding';
+  let nudged = false, template = '';
+  if (steps.shouldRemind(cand, key)) {
     try {
-      const first = (cand.profile && cand.profile.first) || (cand.name || '').split(' ')[0] || 'there';
-      const r = await wa.sendNamedTemplate(cand.phone, tpl, process.env.WHATSAPP_NUDGE_TEMPLATE_LANG || 'en', [first, 'your onboarding']);
-      cand.nudgedAt = new Date().toISOString(); nudged = true;
-      await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: `[Template ${tpl}] reminder to reply`, waId: r.id || '', by: user.name, source: 'system', kind: 'template' }, user);
-    } catch (e) { console.error('nudge failed', e && e.message); }
+      const r = await steps.remind(cand, key, about);
+      if (r) {
+        steps.markReminded(cand, key); nudged = true; template = r.template;
+        await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: `[Template: ${r.template}] ${about}`, waId: r.id, by: user.name, source: 'system', kind: 'template' }, user);
+      }
+    } catch (e) {
+      console.error('reminder failed', e && e.message);
+      await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: '[Template not sent]', error: e.message, by: user.name, source: 'system', kind: 'template' }, user);
+    }
   }
   await store.put('candidates', candidateId, cand, user);
-  return { status: 202, body: { held: true, nudged, waiting: cand.held.length } };
+  return { status: 202, body: { held: true, nudged, template, waiting: cand.held.length } };
 }
 
 async function replayHeld(store, candidateId) {
