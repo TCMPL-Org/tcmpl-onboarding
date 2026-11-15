@@ -95,6 +95,10 @@ function mount() {
     <div class="row">
       <button class="btn small primary" id="jlNext" type="button">Go to next step</button>
       <button class="btn small" id="jlRefresh" type="button">Refresh</button>
+      <span id="jlCallBox" style="display:none;gap:6px;align-items:center">
+        <select id="jlCallPurpose" aria-label="Call purpose"><option value="confirm">Offer confirmation</option><option value="noreply">No reply on WhatsApp</option><option value="eve">Day before joining</option><option value="close">90-day closing</option><option value="general">Other (add a note)</option></select>
+        <button class="btn small" id="jlCall" type="button" title="The AI voice assistant calls the candidate from the company number and saves the answers here">📞 Call now</button>
+      </span>
       <label class="note" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="jlDemo"> Demo mode</label>
     </div>
   </div>
@@ -124,6 +128,7 @@ function mount() {
   intro.after(wrap);
   $('#jlCand').onchange = () => { selected = $('#jlCand').value; sel = null; preview = null; lastSig = ''; docs = []; docEdit = null; missingQ = null; renderAll(); loadMsgs(true); loadDocs(); };
   $('#jlRefresh').onclick = () => reload(selected);
+  $('#jlCall').onclick = callNow;
   $('#jlNext').onclick = () => { const n = nextStep(); if (n) selectStep(n.id, true); };
   $('#jlDemo').onchange = () => setDemo($('#jlDemo').checked);
   $('#jlDemo2').onchange = () => setDemo($('#jlDemo2').checked);
@@ -158,6 +163,7 @@ async function reload(want, stepId) {
   if (stepId) { sel = stepId; preview = null; }
   const u = U(); if (!u) return;
   health = (await u.loadHealth()) || {};
+  if ($('#jlCallBox')) $('#jlCallBox').style.display = health.calls ? 'inline-flex' : 'none';
   if (!health.db) { cands = []; renderAll(); return; }
   const r = await u.getJson('/api/data/candidates').catch(() => ({ ok: false }));
   if (!r.ok) return;
@@ -841,13 +847,33 @@ function renderFacts() {
 function renderChat() {
   const box = $('#jlMsgs'); if (!box) return;
   const f = t => t ? new Date(t).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
-  const who = m => m.direction === 'in' ? '' : ' · ' + (m.source === 'hr' ? 'HR' : m.source === 'journey' ? 'Step' : m.source === 'ai' ? 'Agent (AI)' : m.source === 'induction' ? 'Induction' : 'Agent');
-  box.innerHTML = msgs.map(m => `<div class="b ${m.direction === 'in' ? 'in' : 'out'}"><p style="white-space:pre-wrap;margin:0">${esc(m.text)}</p><span class="meta">${esc(f(m.at))}${esc(who(m))}${U().deliveryHtml ? U().deliveryHtml(m) : (m.error ? ' · not delivered' : '')}</span></div>`).join('')
+  const who = m => m.direction === 'in' ? '' : ' · ' + (m.source === 'hr' ? 'HR' : m.source === 'journey' ? 'Step' : m.source === 'ai' ? 'Agent (AI)' : m.source === 'induction' ? 'Induction' : m.source === 'call' ? 'Phone call (AI)' : 'Agent');
+  const tr = m => Array.isArray(m.transcript) && m.transcript.length ? `<details style="margin-top:6px"><summary class="note">Transcript</summary>${m.transcript.map(t => `<p style="margin:4px 0"><b>${t.role === 'candidate' ? 'Candidate' : 'Agent'}:</b> ${esc(t.text)}</p>`).join('')}</details>` : '';
+  box.innerHTML = msgs.map(m => `<div class="b ${m.direction === 'in' ? 'in' : 'out'}"><p style="white-space:pre-wrap;margin:0">${esc(m.text)}</p>${tr(m)}<span class="meta">${esc(f(m.at))}${esc(who(m))}${m.kind === 'call' ? '' : (U().deliveryHtml ? U().deliveryHtml(m) : (m.error ? ' · not delivered' : ''))}</span></div>`).join('')
     || '<div class="note" style="padding:12px">No messages yet.</div>';
   box.scrollTop = box.scrollHeight;
 }
 
 /* ---------- actions ---------- */
+// The AI voice assistant calls the candidate (LiveKit + Plivo); the outcome and transcript appear in the chat.
+async function callNow() {
+  const c = current(); if (!c) return;
+  const u = U();
+  const purpose = $('#jlCallPurpose').value;
+  let note = '';
+  if (purpose === 'general') { note = window.prompt(`What should the assistant ask or tell ${c.first || c.name}?`, ''); if (note === null) return; }
+  if (!window.confirm(`Call ${c.name} now on +${c.phone}?\n\nThe AI voice assistant introduces itself, speaks in English or Hindi, and saves the answers and transcript here.`)) return;
+  const go = async force => u.getJson('/api/calls/start', { method: 'POST', body: JSON.stringify({ candidateId: c.id, purpose, note, force }) }).catch(() => ({ ok: false }));
+  $('#jlCall').disabled = true;
+  let r = await go(false);
+  if (!r.ok && r.body && r.body.error === 'outside_hours' && window.confirm(`${r.body.detail}\nCall anyway?`)) r = await go(true);
+  $('#jlCall').disabled = false;
+  if (r.ok) { u.toast(`Calling ${c.name}… The result shows in the chat when the call ends.`); await reload(selected); }
+  else if (r.body && r.body.error === 'call_in_progress') u.toast('A call to this candidate is still in progress.');
+  else if (r.body && r.body.error === 'calls_not_configured') u.toast('Calling is not set up yet (LiveKit settings in Azure).');
+  else if (r.body && r.body.error !== 'outside_hours') u.toast('Call not started: ' + (r.body.detail || r.body.error || 'error'));
+}
+
 async function afterSend(r, okMsg) {
   const u = U();
   if (r.ok && r.body && r.body.held) { const c = current(); u.toast(`WhatsApp only allows messages within 24 hours of ${c ? c.first || c.name : 'the candidate'}'s last reply. Saved: it goes out automatically as soon as they write.`); await reload(selected); }

@@ -1,0 +1,3 @@
+livekit-agents[sarvam,openai,silero]==1.8.12
+python-dotenv==1.2.4
+aiohttp>=3.10

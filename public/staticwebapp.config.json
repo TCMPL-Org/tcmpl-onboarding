@@ -19,6 +19,12 @@
       ]
     },
     {
+      "route": "/api/calls/result",
+      "allowedRoles": [
+        "anonymous"
+      ]
+    },
+    {
       "route": "/privacy",
       "rewrite": "/privacy.html",
       "allowedRoles": [

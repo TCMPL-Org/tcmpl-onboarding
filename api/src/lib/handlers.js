@@ -22,7 +22,7 @@ const json = (status, body) => ({ status, jsonBody: body });
 
 function health() {
   const store = getStore();
-  return json(200, { ok: true, db: Boolean(store), store: store ? store.kind : null, ai: aiConfigured(), whatsapp: wa.waConfigured(), webhook: wa.webhookConfigured(), ocr: docintelConfigured(), storage: storageConfigured(), scheduler: Boolean(process.env.CRON_SECRET), email: emailConfigured(), exit: modules.loaded('exit') });
+  return json(200, { ok: true, db: Boolean(store), store: store ? store.kind : null, ai: aiConfigured(), whatsapp: wa.waConfigured(), webhook: wa.webhookConfigured(), ocr: docintelConfigured(), storage: storageConfigured(), scheduler: Boolean(process.env.CRON_SECRET), email: emailConfigured(), exit: modules.loaded('exit'), calls: require('./calls').callsConfigured() });
 }
 
 async function data({ method, col, id, body, user, candidateId }) {
@@ -30,7 +30,7 @@ async function data({ method, col, id, body, user, candidateId }) {
   if (!validCol(col)) return json(404, { error: 'unknown_collection' });
   if (id !== undefined && id !== null && id !== '' && !validId(id)) return json(400, { error: 'bad_id' });
   if (col === 'letters' || col === 'users') return json(403, { error: 'not_available' }); // users: only through /api/access
-  if ((col === 'messages' || col === 'documents' || col === 'content') && method !== 'GET') return json(403, { error: 'read_only' });
+  if ((col === 'messages' || col === 'documents' || col === 'content' || col === 'calls') && method !== 'GET') return json(403, { error: 'read_only' });
   // Module switches and Exit records change only through their own routes (/api/modules, /api/exit).
   if ((col === 'modules' || col.startsWith('exit_')) && method !== 'GET') return json(403, { error: 'read_only' });
   if (col === 'facts' && method === 'PUT' && body) body = { facts: String(body.facts || '').slice(0, 12000), faq: String(body.faq || '').slice(0, 6000), updated: new Date().toISOString() };
@@ -54,7 +54,7 @@ async function data({ method, col, id, body, user, candidateId }) {
         return rec ? json(200, safe(rec)) : json(404, { error: 'not_found' });
       }
       // Messages and documents of one candidate: ?candidateId=wa-91...
-      const cid = (col === 'messages' || col === 'documents') && /^wa-\d{11,15}$/.test(String(candidateId || '')) ? String(candidateId) : '';
+      const cid = (col === 'messages' || col === 'documents' || col === 'calls') && /^wa-\d{11,15}$/.test(String(candidateId || '')) ? String(candidateId) : '';
       const items = (cid ? await store.listByCandidate(col, cid) : await store.list(col)).map(safe);
       return json(200, { items: user.role ? await access.filterItems(user, col, items) : items });
     }

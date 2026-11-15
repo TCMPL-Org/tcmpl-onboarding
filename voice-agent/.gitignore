@@ -1,0 +1,6 @@
+.env
+.env.*
+!.env.example
+secrets.env
+__pycache__/
+.venv/
