@@ -147,7 +147,7 @@ async function confirm(token) {
   if (!rec) return page('This candidate is no longer in onboarding.', false);
   const cand = Object.assign({}, rec.data);
   const who = cand.name || 'the new joiner';
-  let msg;
+  let msg, acceptedNow = false;
   if (p.a === 'done' || p.a === 'issue') {
     const r = cand.readiness = Object.assign({ items: {}, asks: {} }, cand.readiness);
     const it = r.items[p.k] = Object.assign({}, r.items[p.k]);
@@ -166,7 +166,7 @@ async function confirm(token) {
     msg = p.a === 'ind-yes' ? 'Thank you, noted that it happened.' : 'Thank you. HR will follow up to set a new time.';
   } else if (p.a === 'offer') {
     const now = nowIso();
-    if (p.v === 'accept') { cand.acceptedAt = cand.acceptedAt || now; cand.stage = 'Offer accepted'; msg = `Thank you${cand.first ? ', ' + cand.first : ''}! Your acceptance is recorded. We will be in touch on WhatsApp for the next steps.`; }
+    if (p.v === 'accept') { if (!cand.acceptedAt) acceptedNow = true; cand.acceptedAt = cand.acceptedAt || now; cand.stage = 'Offer accepted'; msg = `Thank you${cand.first ? ', ' + cand.first : ''}! Your acceptance is recorded. We will be in touch on WhatsApp for the next steps.`; }
     else if (p.v === 'decline') { cand.declinedAt = now; cand.stage = 'Offer declined'; cand.handovers = (cand.handovers || []).concat([{ why: 'Candidate clicked Decline in the offer email: call them today', at: now, open: true }]); msg = 'Thank you for letting us know. Someone from HR will call you shortly.'; }
     else if (p.v === 'questions') { cand.handovers = (cand.handovers || []).concat([{ why: 'Candidate has questions about the offer (from email)', at: now, open: true }]); msg = 'Thank you. HR will contact you to answer your questions. You can also type them on WhatsApp.'; }
     else return page('Unknown answer.', false);
@@ -183,6 +183,7 @@ async function confirm(token) {
   } else return page('Unknown action.', false);
   await alertHandovers(store, p.c, cand);
   await store.put('candidates', p.c, cand, SYSTEM);
+  if (acceptedNow) await require('./conversations').autoStartDocs(store, p.c).catch(e => console.error('auto documents failed', e && e.message));
   return page(msg, true);
 }
 
@@ -199,6 +200,7 @@ async function saveSettings(p, user) {
   if (!client) return { status: 400, body: { error: 'client_required' } };
   const rec = await store.get('journeys', client);
   const data = Object.assign({}, rec && rec.data, { client, email: { replyTo: email.addresses(p.replyTo).join(', '), cc: email.addresses(p.cc).join(', '), mirror: p.mirror !== false, alertManager: Boolean(p.alertManager) }, updated: nowIso() });
+  if (typeof p.autoDocs === 'boolean') data.autoDocs = p.autoDocs; // ask for documents as soon as the offer is accepted (default on)
   await store.put('journeys', client, data, user);
   return { status: 200, body: { email: data.email, configured: email.emailConfigured(), sender: process.env.ACS_SENDER || '' } };
 }

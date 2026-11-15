@@ -25,7 +25,7 @@ function health() {
   return json(200, { ok: true, db: Boolean(store), store: store ? store.kind : null, ai: aiConfigured(), whatsapp: wa.waConfigured(), webhook: wa.webhookConfigured(), ocr: docintelConfigured(), storage: storageConfigured(), scheduler: Boolean(process.env.CRON_SECRET), email: emailConfigured(), exit: modules.loaded('exit') });
 }
 
-async function data({ method, col, id, body, user }) {
+async function data({ method, col, id, body, user, candidateId }) {
   if (!user) return json(401, { error: 'sign_in_required' });
   if (!validCol(col)) return json(404, { error: 'unknown_collection' });
   if (id !== undefined && id !== null && id !== '' && !validId(id)) return json(400, { error: 'bad_id' });
@@ -53,7 +53,9 @@ async function data({ method, col, id, body, user }) {
         if (rec && user.role && !(await access.filterItems(user, col, [rec])).length) return json(403, { error: 'client_not_allowed' });
         return rec ? json(200, safe(rec)) : json(404, { error: 'not_found' });
       }
-      const items = (await store.list(col)).map(safe);
+      // Messages and documents of one candidate: ?candidateId=wa-91...
+      const cid = (col === 'messages' || col === 'documents') && /^wa-\d{11,15}$/.test(String(candidateId || '')) ? String(candidateId) : '';
+      const items = (cid ? await store.listByCandidate(col, cid) : await store.list(col)).map(safe);
       return json(200, { items: user.role ? await access.filterItems(user, col, items) : items });
     }
     if (!id) return json(400, { error: 'id_required' });
@@ -184,10 +186,12 @@ async function cronTick({ key }) {
   const want = process.env.CRON_SECRET || '';
   const a = Buffer.from(String(key || '')), b = Buffer.from(want);
   if (!want || a.length !== b.length || !require('node:crypto').timingSafeEqual(a, b)) return json(401, { error: 'bad_key' });
-  const out = await inductionRun.tick();
+  // The API stops a request after 45 seconds: onboarding gets ~22 s, the other modules (Exit) the rest up to 36 s.
+  const started = Date.now();
+  const out = await inductionRun.tick(Date.now(), 22000);
   // Other modules (Exit) run their own due steps; their errors are caught inside runTicks.
   const store = getStore();
-  if (store) out.modules = await modules.runTicks(store);
+  if (store) out.modules = await modules.runTicks(store, Date.now(), started + 36000);
   return json(200, out);
 }
 
@@ -221,6 +225,9 @@ async function waWebhook(rawBody, signature) {
   try { payload = JSON.parse(rawBody); } catch { return { status: 400, body: 'Bad JSON' }; }
   for (const m of wa.parseInbound(payload)) {
     try { await conversations.handleInbound(m); } catch (e) { console.error('whatsapp inbound failed', e && e.message); }
+  }
+  for (const s of wa.parseStatuses(payload)) {
+    try { await conversations.onStatus(s); } catch (e) { console.error('whatsapp status failed', e && e.message); }
   }
   return { status: 200, body: 'OK' };
 }

@@ -198,7 +198,7 @@ async function loadPlan(c) {
 async function loadDocs() {
   const u = U(); if (!u || !selected) { docs = []; return; }
   const want = selected;
-  const r = await u.getJson('/api/data/documents').catch(() => ({ ok: false }));
+  const r = await u.getJson('/api/data/documents?candidateId=' + encodeURIComponent(want)).catch(() => ({ ok: false }));
   if (!r.ok || want !== selected) return;
   docs = (r.body.items || []).map(i => i.data).filter(d => d && d.candidateId === selected);
   rerender();
@@ -213,10 +213,11 @@ async function loadMissing() {
 
 async function loadMsgs(force) {
   const u = U(); if (!u || !selected) return;
-  const r = await u.getJson('/api/data/messages').catch(() => ({ ok: false }));
-  if (!r.ok) return;
+  const want = selected;
+  const r = await u.getJson('/api/data/messages?candidateId=' + encodeURIComponent(want)).catch(() => ({ ok: false }));
+  if (!r.ok || want !== selected) return;
   msgs = (r.body.items || []).map(i => i.data).filter(m => m && m.candidateId === selected).sort((a, b) => String(a.at).localeCompare(String(b.at)));
-  const sig = JSON.stringify([selected, msgs.length, msgs.length && msgs[msgs.length - 1].at]);
+  const sig = JSON.stringify([selected, msgs.length, msgs.length && msgs[msgs.length - 1].at, msgs.map(m => m.status || '').join('')]);
   if (!force && sig === lastSig) return;
   lastSig = sig;
   renderChat();
@@ -841,7 +842,7 @@ function renderChat() {
   const box = $('#jlMsgs'); if (!box) return;
   const f = t => t ? new Date(t).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
   const who = m => m.direction === 'in' ? '' : ' · ' + (m.source === 'hr' ? 'HR' : m.source === 'journey' ? 'Step' : m.source === 'ai' ? 'Agent (AI)' : m.source === 'induction' ? 'Induction' : 'Agent');
-  box.innerHTML = msgs.map(m => `<div class="b ${m.direction === 'in' ? 'in' : 'out'}"><p style="white-space:pre-wrap;margin:0">${esc(m.text)}</p><span class="meta">${esc(f(m.at))}${esc(who(m))}${m.error ? ' · not delivered' : ''}</span></div>`).join('')
+  box.innerHTML = msgs.map(m => `<div class="b ${m.direction === 'in' ? 'in' : 'out'}"><p style="white-space:pre-wrap;margin:0">${esc(m.text)}</p><span class="meta">${esc(f(m.at))}${esc(who(m))}${U().deliveryHtml ? U().deliveryHtml(m) : (m.error ? ' · not delivered' : '')}</span></div>`).join('')
     || '<div class="note" style="padding:12px">No messages yet.</div>';
   box.scrollTop = box.scrollHeight;
 }

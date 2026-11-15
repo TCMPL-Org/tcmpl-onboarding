@@ -23,6 +23,7 @@ app.http('data', {
       col: request.params.col,
       id: request.params.id,
       body,
+      candidateId: request.query.get('candidateId') || '',
       user: g.user
     });
   }

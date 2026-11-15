@@ -1,4 +1,5 @@
 'use strict';
+const { isOtherMessage } = require('./answers');
 // Induction on WhatsApp, driven by each client's induction plan (Induction tab → plans/<clientId>).
 //
 // Milestone types:
@@ -184,6 +185,7 @@ function onInbound(cand, planRec, m) {
       if (+dm[2] < nowD.getUTCMonth() + 1 - 1) y++; // e.g. typed in December for January
       iso = `${y}-${String(dm[2]).padStart(2, '0')}-${String(dm[1]).padStart(2, '0')}`;
     }
+    if (!iso && isOtherMessage(text)) return { handled: false, replies: [], reask: [{ text: `When you're ready, please type the new date and time for "${it.title}", e.g. *12/12 3 pm*.` }] };
     if (!iso) return { handled: true, replies: [{ text: 'Please type the new date and time, e.g. *12/12 3 pm*.' }] };
     const tm = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(text.replace(/\d{1,2}[/.-]\d{1,2}([/.-]\d{2,4})?/, ''));
     let h = tm ? +tm[1] : 10; const mi = tm && tm[2] ? +tm[2] : 0;
@@ -217,6 +219,7 @@ function onInbound(cand, planRec, m) {
     if (!q) { ind.pending = null; return { handled: false, replies: [] }; }
     let pick = q.options.findIndex(o => o.toLowerCase() === text.toLowerCase());
     if (pick < 0 && /^[1-3]$/.test(text)) pick = +text - 1;
+    if (pick < 0 && isOtherMessage(text)) return { handled: false, replies: [], reask: [quizQuestion(quiz, p.i)] };
     if (pick < 0) return { handled: true, replies: [{ text: 'Please tap one of the answers.' }, quizQuestion(quiz, p.i)] };
     const right = pick === q.answer;
     const score = p.score + (right ? 1 : 0);

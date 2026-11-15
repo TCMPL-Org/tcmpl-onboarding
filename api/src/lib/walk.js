@@ -52,7 +52,7 @@ async function action(name, p, user) {
     await store.put('candidates', id, fresh, user);
     let removed = 0;
     if (p.clearChat !== false) {
-      for (const m of await store.list('messages')) if (m.data && m.data.candidateId === id) { await store.remove('messages', m.id, user); removed++; }
+      for (const m of await store.listByCandidate('messages', id)) if (m.data && m.data.candidateId === id) { await store.remove('messages', m.id, user); removed++; }
     }
     for (const t of ['aadhaar', 'pan', 'bank']) await store.remove('documents', `${id}.${t}`, user);
     return { status: 200, body: { reset: true, messagesRemoved: removed } };

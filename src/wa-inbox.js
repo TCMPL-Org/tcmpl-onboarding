@@ -166,7 +166,7 @@ window.tcmplWA.onTouchpoint = () => {
   if (auto && auto.checked) setTimeout(() => sendCurrentTouchpoint(true), 400);
 };
 
-window.tcmplWAUtil = { toWaText, push, explain, candId, blobToBase64, getJson, loadHealth, toast, fmt: (t) => fmt(t), esc };
+window.tcmplWAUtil = { deliveryHtml, toWaText, push, explain, candId, blobToBase64, getJson, loadHealth, toast, fmt: (t) => fmt(t), esc };
 
 /* ---------- tab ---------- */
 function mount() {
@@ -239,6 +239,16 @@ function mount() {
   return true;
 }
 
+// Meta's delivery report for an outgoing message: ✓ sent, ✓✓ delivered, ✓✓ read, or why it failed.
+function deliveryHtml(x) {
+  if (x.direction === 'in') return '';
+  if (x.error || x.status === 'failed') return ` · <span style="color:var(--red,#c0392b)" title="${esc(x.error || '')}">✗ Not delivered${x.error && x.error.length < 140 ? ': ' + esc(x.error) : ''}</span>`;
+  if (x.status === 'read') return ' · <span style="color:var(--blue,#1f6feb)">✓✓ Read</span>';
+  if (x.status === 'delivered') return ' · ✓✓ Delivered';
+  if (x.status === 'sent') return ' · ✓ Sent';
+  return '';
+}
+
 function fmt(ts) {
   if (!ts) return '';
   const d = new Date(ts);
@@ -255,14 +265,17 @@ async function refresh(force) {
     else { state.textContent = 'WhatsApp live'; state.className = 'chip ok'; }
   }
   if (!h.db) return;
-  const [c, m] = await Promise.all([getJson('/api/data/candidates'), getJson('/api/data/messages')]).catch(() => [{}, {}]);
-  if (!c.ok || !m.ok) return;
+  const c = await getJson('/api/data/candidates').catch(() => ({}));
+  if (!c.ok) return;
   const cands = (c.body.items || []).map(i => Object.assign({ id: i.id }, i.data)).sort((a, b) => String(b.lastMessageAt).localeCompare(String(a.lastMessageAt)));
+  if (!selected && cands.length) selected = cands[0].id;
+  // Only the open conversation's messages are loaded.
+  const m = selected ? await getJson('/api/data/messages?candidateId=' + encodeURIComponent(selected)).catch(() => ({})) : { ok: true, body: { items: [] } };
+  if (!m.ok) return;
   const msgs = (m.body.items || []).map(i => i.data);
-  const sig = JSON.stringify([cands.map(x => [x.id, x.lastMessageAt]), msgs.length, selected]);
+  const sig = JSON.stringify([cands.map(x => [x.id, x.lastMessageAt]), msgs.length, msgs.map(x => x.status || '').join(''), selected]);
   if (!force && sig === lastSig) return;
   lastSig = sig;
-  if (!selected && cands.length) selected = cands[0].id;
 
   $('#waList').innerHTML = cands.length ? cands.map(x => {
     const open = (x.handovers || []).filter(h2 => h2.open).length;
@@ -281,7 +294,7 @@ async function refresh(force) {
   $('#waAvatar').textContent = (cur.name || 'WA').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
   const thread = msgs.filter(x => x.candidateId === selected).sort((a, b) => String(a.at).localeCompare(String(b.at)));
   // Candidate messages on the left, agent/HR on the right (the inbox is HR's view).
-  $('#waMsgs').innerHTML = thread.map(x => `<div class="b ${x.direction === 'in' ? 'in' : 'out'}"><p>${esc(x.text)}</p><span class="meta">${esc(fmt(x.at))}${x.direction === 'out' ? ' · ' + (x.source === 'hr' ? 'HR' : x.source === 'ai' ? 'Agent (AI)' : 'Agent') : ''}${x.error ? ' · not delivered' : ''}</span></div>`).join('') || '<div class="note" style="padding:12px">No messages yet.</div>';
+  $('#waMsgs').innerHTML = thread.map(x => `<div class="b ${x.direction === 'in' ? 'in' : 'out'}"><p>${esc(x.text)}</p><span class="meta">${esc(fmt(x.at))}${x.direction === 'out' ? ' · ' + (x.source === 'hr' ? 'HR' : x.source === 'ai' ? 'Agent (AI)' : 'Agent') : ''}${deliveryHtml(x)}</span></div>`).join('') || '<div class="note" style="padding:12px">No messages yet.</div>';
   const box = $('#waMsgs'); box.scrollTop = box.scrollHeight;
   const risk = (cur.risk || []).map(r => esc(r.label)).join('; ') || 'None';
   const ho = (cur.handovers || []).map(x => `${esc(x.why)} <span class="note">${esc(fmt(x.at))}</span>`).join('<br>') || 'None';

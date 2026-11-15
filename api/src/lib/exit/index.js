@@ -296,10 +296,11 @@ async function handle(m, store) {
 }
 
 /* ---------------- Scheduler: steps due at each case's clock; sent automatically when the client switches it on ---------------- */
-async function tick(store, now = Date.now()) {
-  let cases = 0, due = 0, sent = 0;
+async function tick(store, now = Date.now(), opts = {}) {
+  let cases = 0, due = 0, sent = 0, stopped = false;
   const setups = {};
   for (const rec of await store.list('exit_cases')) {
+    if (opts.deadline && Date.now() > opts.deadline) { stopped = true; break; }
     const k = rec.data;
     if (!k || k.status !== 'open' || !Array.isArray(k.plan)) continue;
     if (!await modules.enabled(store, k.client, 'exit')) continue;
@@ -320,7 +321,7 @@ async function tick(store, now = Date.now()) {
     }
     if (JSON.stringify([k.plan, k.alerts, k.approvals, k.held]) !== before) { await alertHr(store, k); await store.put('exit_cases', rec.id, k, SYSTEM); cases++; }
   }
-  return { ok: true, cases, due, sent };
+  return { ok: true, cases, due, sent, stopped };
 }
 
 /* ---------------- One-click links with m: 'exit' (approvals and clearances, next batch) ---------------- */

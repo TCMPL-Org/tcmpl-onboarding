@@ -77,6 +77,51 @@ function parseInbound(body) {
   return out;
 }
 
+// Delivery reports Meta sends for our own messages: sent, delivered, read, failed.
+function parseStatuses(body) {
+  const out = [];
+  const own = (process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
+  for (const entry of (body && Array.isArray(body.entry) ? body.entry : [])) {
+    for (const change of (entry.changes || [])) {
+      const v = change.value || {};
+      const to = v.metadata && v.metadata.phone_number_id;
+      if (own && to && String(to) !== own) continue;
+      for (const s of (v.statuses || [])) {
+        if (!s || !s.id || !s.status) continue;
+        const e = Array.isArray(s.errors) && s.errors[0];
+        out.push({
+          waId: s.id, status: String(s.status), recipient: s.recipient_id || '', timestamp: s.timestamp || '',
+          error: e ? { code: e.code, title: e.title || '', message: e.message || '', details: (e.error_data && e.error_data.details) || '' } : null
+        });
+      }
+    }
+  }
+  return out;
+}
+
+// Meta's error codes in plain words for HR.
+const FAILURE_REASONS = {
+  131047: 'More than 24 hours since the candidate last wrote, so only an approved template can be sent',
+  131026: 'This number cannot receive the message (not on WhatsApp, old WhatsApp version, or terms not accepted)',
+  131049: 'Meta limited messages to this person to keep engagement healthy; try again later',
+  131050: 'The candidate has stopped marketing messages from this business',
+  131042: 'Payment problem on the WhatsApp account',
+  131056: 'Too many messages to this number in a short time',
+  131053: 'The file could not be sent',
+  132000: 'The template variables do not match the approved template',
+  132001: 'The template does not exist or is not approved in this language',
+  132015: 'The template is paused for low quality',
+  132016: 'The template is disabled',
+  130429: 'Sending too fast (rate limit)',
+  131048: 'Spam rate limit reached for this number',
+  131031: 'The WhatsApp business account is locked',
+  368: 'The business account is temporarily blocked by Meta'
+};
+function failureText(err) {
+  if (!err) return 'Not delivered';
+  return FAILURE_REASONS[err.code] || err.details || err.message || err.title || `Not delivered (code ${err.code})`;
+}
+
 async function graph(payload) {
   const version = process.env.WHATSAPP_GRAPH_VERSION || 'v23.0';
   const url = `https://graph.facebook.com/${version}/${encodeURIComponent(process.env.WHATSAPP_PHONE_NUMBER_ID)}/messages`;
@@ -171,4 +216,4 @@ async function downloadMedia(mediaId, maxBytes = 15000000) {
   return { buffer, mime: info.mime_type || res.headers.get('content-type') || 'application/octet-stream' };
 }
 
-module.exports = { sendNamedTemplate, downloadMedia, templateWantsDocument, sendButtons, uploadMedia, sendDocument, waConfigured, webhookConfigured, normalizePhone, candidateIdFor, verifySignature, parseInbound, sendText, sendTemplate };
+module.exports = { parseStatuses, failureText, sendNamedTemplate, downloadMedia, templateWantsDocument, sendButtons, uploadMedia, sendDocument, waConfigured, webhookConfigured, normalizePhone, candidateIdFor, verifySignature, parseInbound, sendText, sendTemplate };

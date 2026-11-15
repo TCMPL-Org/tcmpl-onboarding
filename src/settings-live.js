@@ -20,9 +20,10 @@ function mount() {
     </div>
     <label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" id="slMirror" checked> Also email the candidate a copy of what goes on WhatsApp, with the same attachments (offer letter, forms, decks)</label>
     <label style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="checkbox" id="slMgr"> Copy the candidate's manager on HR alerts (red items: decline, "need help", low ratings, no answer)</label>
+    <label style="display:flex;gap:6px;align-items:center;margin-top:4px"><input type="checkbox" id="slAutoDocs" checked> Ask for documents (Aadhaar, PAN, bank) automatically as soon as the candidate accepts the offer</label>
     <p class="note" style="margin:4px 0 0">HR alerts go to the HR email in Journey setup → Default contacts (or the Reply-to above) the moment something turns red.</p>
     <p class="note" style="margin:8px 0">Owners' emails come from the People section below: write them like <i>Rohit Verma, IT &lt;rohit@company.com&gt;</i>.</p>
-    <div class="row"><button class="btn small primary" id="slSave" type="button">Save email settings</button><span class="note" id="slState"></span></div>`;
+    <div class="row"><button class="btn small primary" id="slSave" type="button">Save settings</button><span class="note" id="slState"></span></div>`;
   sec.querySelector('.intro').after(box);
   $('#slSave').onclick = save;
   document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab === 'config') load(); }));
@@ -40,12 +41,13 @@ async function load() {
   const r = h.db ? await u.getJson(`/api/data/journeys/${encodeURIComponent(client)}`).catch(() => ({ ok: false })) : { ok: false };
   const e = (r.ok && r.body.data && r.body.data.email) || {};
   $('#slReply').value = e.replyTo || ''; $('#slCc').value = e.cc || ''; $('#slMirror').checked = e.mirror !== false; $('#slMgr').checked = Boolean(e.alertManager);
+  $('#slAutoDocs').checked = !(r.ok && r.body.data && r.body.data.autoDocs === false);
   $('#slState').textContent = '';
 }
 
 async function save() {
   const client = window.tcmplClientId ? window.tcmplClientId() : '';
-  const r = await U().getJson('/api/notify/settings', { method: 'POST', body: JSON.stringify({ client, replyTo: $('#slReply').value, cc: $('#slCc').value, mirror: $('#slMirror').checked, alertManager: $('#slMgr').checked }) }).catch(() => ({ ok: false }));
+  const r = await U().getJson('/api/notify/settings', { method: 'POST', body: JSON.stringify({ client, replyTo: $('#slReply').value, cc: $('#slCc').value, mirror: $('#slMirror').checked, alertManager: $('#slMgr').checked, autoDocs: $('#slAutoDocs').checked }) }).catch(() => ({ ok: false }));
   if (!r.ok) { $('#slState').textContent = 'Not saved.'; return; }
   $('#slReply').value = r.body.email.replyTo; $('#slCc').value = r.body.email.cc;
   $('#slState').textContent = 'Saved' + (r.body.sender ? ' · sent from ' + esc(r.body.sender) : '');

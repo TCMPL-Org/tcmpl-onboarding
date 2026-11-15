@@ -30,7 +30,7 @@ function newId(prefix) {
 }
 
 async function history(store, candidateId) {
-  const all = await store.list('messages');
+  const all = await store.listByCandidate('messages', candidateId);
   return all.map(r => r.data).filter(m => m && m.candidateId === candidateId).sort((a, b) => String(a.at).localeCompare(String(b.at)));
 }
 
@@ -84,15 +84,27 @@ async function startForOffer(p, user) {
   const candidateId = wa.candidateIdFor(phone);
   const existing = await store.get('candidates', candidateId);
   const prev = (existing && existing.data) || {};
-  const cand = {
+  const now = new Date().toISOString();
+  const offer = {
     phone, name: str(p.name, 120), first: str(p.first, 60) || str(p.name, 120).split(' ')[0],
     email: str(p.email, 200), role: str(p.role, 200), client: str(p.client, 100), clientLabel: str(p.clientLabel, 200),
     company: str(p.company, 200), agentName: str(p.agentName, 60), recruiter: str(p.recruiter, 120), doj: str(p.doj, 40),
     facts: str(p.facts, 12000), faq: str(p.faq, 6000), offerId: str(p.offerId, 100),
-    stage: 'Offer released', risk: prev.risk || [], riskScore: prev.riskScore || 0, handovers: prev.handovers || [],
-    profile: cleanProfile(p.profile), releasedAt: new Date().toISOString(), touchpoints: prev.touchpoints || {},
-    lastMessageAt: new Date().toISOString()
+    stage: 'Offer released', profile: cleanProfile(p.profile), releasedAt: now, lastMessageAt: now
   };
+  // A revised offer for the same client (new CTC, joining date, role) keeps everything already done:
+  // documents and KYC, details and forms, check-in answers, induction, contacts, consent, the WhatsApp window.
+  // Only the offer changes; the revised offer is accepted again and the earlier one is kept in offerHistory.
+  const prevClient = (prev.profile && prev.profile.client) || prev.client || '';
+  const sameClient = Boolean(existing) && (!prevClient || !clientId || prevClient === clientId);
+  const keep = sameClient ? Object.assign({}, prev)
+    : { risk: prev.risk, riskScore: prev.riskScore, handovers: prev.handovers, touchpoints: prev.touchpoints, lastInboundAt: prev.lastInboundAt, nudges: prev.nudges };
+  const history = (sameClient && prev.offerId ? [{ offerId: prev.offerId, role: prev.role, doj: prev.doj, releasedAt: prev.releasedAt, acceptedAt: prev.acceptedAt || null, stage: prev.stage }] : []).concat(prev.offerHistory || []).slice(0, 10);
+  const cand = Object.assign(keep, offer, {
+    risk: keep.risk || [], riskScore: keep.riskScore || 0, handovers: keep.handovers || [], touchpoints: keep.touchpoints || {},
+    acceptedAt: null, declinedAt: null, offerHistory: history
+  });
+  if (sameClient && prev.offerId) cand.stage = 'Revised offer released';
   const pdf = typeof p.letterPdfBase64 === 'string' && p.letterPdfBase64.length > 100 && p.letterPdfBase64.length < MAX_PDF_B64 ? p.letterPdfBase64 : '';
   if (pdf) {
     cand.letterFile = str(p.letterFile, 150) || 'Offer_Letter.pdf';
@@ -150,17 +162,20 @@ async function handleInboundCore(m) {
   await saveMessage(store, id, { candidateId, direction: 'in', text, waId: m.id || '', kind: m.type || 'text' }, who);
 
   // Documents (photos, PDFs, consent and confirmation replies) are handled before the agent.
+  let reask = [];
   if (rec) {
+    // A waiting question the candidate did not answer (they wrote about something else) is asked again after the agent's reply.
+    const take = x => { if (x && !x.handled && Array.isArray(x.reask)) reask = reask.concat(x.reask); return x; };
     let d = await documents.onInbound(store, candidateId, cand, m);
-    if (!d.handled) d = profile.onInbound(cand, m);
+    if (!d.handled) d = take(profile.onInbound(cand, m));
     // Journey check-ins: whichever question was asked last gets the answer first.
     const ckp = cand.checkins && cand.checkins.pending;
     const ckFirst = ckp && [cand.readiness && cand.readiness.pending, cand.induction && cand.induction.pending].every(x => !x || !x.at || x.at <= ckp.at);
     const ck = async () => checkins.onInbound(cand, await inductionRun.setupFor(store, cand.profile && cand.profile.client), m);
-    if (!d.handled && ckp && ckFirst) d = await ck();
-    if (!d.handled && cand.readiness) d = readiness.onInbound(cand, m);
-    if (!d.handled && cand.induction) d = induction.onInbound(cand, await inductionRun.planFor(store, cand.profile && cand.profile.client), m);
-    if (!d.handled && ckp && !ckFirst) d = await ck();
+    if (!d.handled && ckp && ckFirst) d = take(await ck());
+    if (!d.handled && cand.readiness) d = take(readiness.onInbound(cand, m));
+    if (!d.handled && cand.induction) d = take(induction.onInbound(cand, await inductionRun.planFor(store, cand.profile && cand.profile.client), m));
+    if (!d.handled && ckp && !ckFirst) d = take(await ck());
     if (d.handled) {
       await inductionRun.deliver(store, candidateId, cand, d.replies, SYSTEM, '', 'agent');
       const now = new Date().toISOString();
@@ -181,6 +196,7 @@ async function handleInboundCore(m) {
   let waId = '', error = '';
   try { waId = (await wa.sendText(cand.phone, out.reply)).id || ''; } catch (e) { error = e.message; }
   await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: out.reply, waId, error, source: out.source, kind: 'text' }, SYSTEM);
+  if (reask.length && !error) await inductionRun.deliver(store, candidateId, cand, reask, SYSTEM, '', 'agent').catch(e => console.error('re-ask failed', e && e.message));
 
   // WhatsApp allows files once the candidate has written to us: send the offer letter now, once.
   let letterSent = Boolean(cand.letterSent);
@@ -206,6 +222,24 @@ async function handleInboundCore(m) {
     acceptedAt: ACCEPT.test(text) ? (cand.acceptedAt || now) : cand.acceptedAt,
     declinedAt: DECLINE.test(text) ? now : cand.declinedAt
   }), SYSTEM);
+  return { accepted: Boolean(rec) && ACCEPT.test(text) && !cand.acceptedAt };
+}
+
+// Offer accepted (WhatsApp or the email link): ask for documents straight away, unless HR switched it off
+// for the client (Client setup → Settings) or documents were already asked for.
+async function autoStartDocs(store, candidateId) {
+  const rec = await store.get('candidates', candidateId);
+  if (!rec || !rec.data) return null;
+  const c = rec.data;
+  if (c.docs && c.docs.requestedAt) return null;
+  const client = c.profile && c.profile.client;
+  const j = client ? await store.get('journeys', String(client)).catch(() => null) : null;
+  if (j && j.data && j.data.autoDocs === false) return null;
+  if (!wa.waConfigured()) return null;
+  if (!windowOpen(c)) return hold(candidateId, 'docs', { candidateId, touchpoint: 'Documents and KYC' }, SYSTEM);
+  const r = await documents.request(store, candidateId, SYSTEM);
+  if (r.status === 200) for (const q of (r.body.replies || [])) await saveMessage(store, newId('o'), { candidateId, direction: 'out', text: q.buttons ? `${q.text}\n[Buttons: ${q.buttons.join(' | ')}]` : q.text, source: 'journey', touchpoint: 'Documents and KYC', kind: q.buttons ? 'interactive' : 'text' }, SYSTEM);
+  return r;
 }
 
 // HR replies by hand from the inbox.
@@ -441,8 +475,10 @@ async function handleInbound(m) {
   // Other modules (Exit) first: one claims the message when it belongs to it (e.g. an open exit case).
   const s0 = getStore();
   if (s0 && m && m.from && await modules.route(m, s0)) return;
-  await handleInboundCore(m);
+  const core = await handleInboundCore(m);
   const store = getStore();
+  // Offer just accepted: documents start now (the candidate has just written, so the window is open).
+  if (store && core && core.accepted) await autoStartDocs(store, wa.candidateIdFor(m.from)).catch(e => console.error('auto documents failed', e && e.message));
   // New red items from this message (decline, "Need help", low rating, …) → email HR now.
   if (store && m && m.from) {
     try {
@@ -456,6 +492,28 @@ async function handleInbound(m) {
   }
   // The candidate just wrote, so the 24-hour window is open: send anything HR queued while it was closed.
   if (store && m && m.from) await replayHeld(store, wa.candidateIdFor(m.from)).catch(e => console.error('replay failed', e && e.message));
+}
+
+/* ---------- delivery reports from Meta ---------- */
+// sent < delivered < read; failed always wins. Only the message record changes (never the candidate),
+// so a report arriving during a conversation can never overwrite the conversation's own changes.
+const RANK = { sent: 1, delivered: 2, read: 3, failed: 9 };
+async function onStatus(s) {
+  const store = getStore();
+  if (!store || !s || !s.waId) return false;
+  const candidateId = wa.candidateIdFor(s.recipient);
+  if (!candidateId) return false;
+  const rec = (await store.listByCandidate('messages', candidateId)).find(r => r.data && r.data.waId === s.waId);
+  if (!rec) return false;
+  const m = Object.assign({}, rec.data);
+  if ((RANK[s.status] || 0) <= (RANK[m.status] || 0)) return false;
+  const at = s.timestamp && /^\d+$/.test(String(s.timestamp)) ? new Date(+s.timestamp * 1000).toISOString() : new Date().toISOString();
+  m.status = s.status; m.statusAt = at;
+  if (s.status === 'delivered') m.deliveredAt = at;
+  if (s.status === 'read') { m.readAt = at; m.deliveredAt = m.deliveredAt || at; }
+  if (s.status === 'failed') { m.error = wa.failureText(s.error); m.errorCode = (s.error && s.error.code) || ''; }
+  await store.put('messages', rec.id, m, SYSTEM);
+  return true;
 }
 
 /* ---------- messages held while the 24-hour window is closed ---------- */
@@ -507,4 +565,4 @@ async function replayHeld(store, candidateId) {
   return held.length;
 }
 
-module.exports = { windowOpen, hold, replayHeld, withLatestFacts, startForOffer, handleInbound, sendManual, pushItems, askDetails, saveForms, sendForms, missingDetails };
+module.exports = { autoStartDocs, onStatus, windowOpen, hold, replayHeld, withLatestFacts, startForOffer, handleInbound, sendManual, pushItems, askDetails, saveForms, sendForms, missingDetails };

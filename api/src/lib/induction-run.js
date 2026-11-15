@@ -224,16 +224,29 @@ async function sendCheckin(store, id, cand, c, by) {
 }
 
 // Scheduler: everything due for every candidate. Stops before the function time limit.
-async function tick(realNow = Date.now(), budgetMs = 35000) {
+// Nothing left to send: declined, never had an offer, or more than 100 days past joining.
+function finished(cand, realNow) {
+  if (!cand.phone || !cand.profile || !cand.profile.client) return true;
+  if (/declined|withdrawn|closed/i.test(cand.stage || '')) return true;
+  const doj = Date.parse((cand.profile.doj || '') + 'T00:00:00Z');
+  return Number.isFinite(doj) && nowFor(cand, realNow) - doj > 100 * 24 * 3600e3;
+}
+
+async function tick(realNow = Date.now(), budgetMs = 22000) {
   const store = getStore();
   if (!store || !wa.waConfigured()) return { ok: false, reason: 'not_configured' };
   const started = Date.now();
   const plans = {};
   const onFor = {}; // client -> Onboarding switched on? (Client setup → Modules)
   const modules = require('./modules');
-  let candidates = 0, sent = 0;
-  for (const rec of await store.list('candidates')) {
-    if (Date.now() - started > budgetMs) break;
+  let candidates = 0, sent = 0, skipped = 0, looked = 0;
+  // Start somewhere different every 15 minutes, so with many candidates nobody is always last.
+  const all = (await store.list('candidates')).filter(r => r.data && !finished(r.data, realNow));
+  const start = all.length ? Math.floor(realNow / (15 * 60000)) % all.length : 0;
+  const order = all.slice(start).concat(all.slice(0, start));
+  for (const rec of order) {
+    if (Date.now() - started > budgetMs) { skipped = order.length - looked; break; }
+    looked++;
     const cand = Object.assign({}, rec.data);
     const cl = (cand.profile && cand.profile.client) || '';
     if (cl && !(cl in onFor)) onFor[cl] = await modules.enabled(store, cl, 'onboarding').catch(() => true);
@@ -243,7 +256,7 @@ async function tick(realNow = Date.now(), budgetMs = 35000) {
     sent += n;
     if (n || JSON.stringify([cand.induction || null, cand.readiness || null, cand.checkins || null, (cand.handovers || []).length]) !== before) { await store.put('candidates', rec.id, cand, SYSTEM); candidates++; }
   }
-  return { ok: true, candidates, sent, ms: Date.now() - started };
+  return { ok: true, candidates, sent, skipped, ms: Date.now() - started };
 }
 
 // HR: send one milestone now (for testing, or to resend).

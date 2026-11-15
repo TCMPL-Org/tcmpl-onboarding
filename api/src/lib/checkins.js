@@ -1,4 +1,5 @@
 'use strict';
+const { isOtherMessage } = require('./answers');
 // Journey check-ins: one engine for everything the agent asks or tells people on a cadence, configured per client
 // (Client setup → Journey setup), with a TCMPL default:
 //   pre-joining  – resignation status (weekly until submitted), manager/HR agreement, relieving date, notice-pay
@@ -329,11 +330,13 @@ function onInbound(cand, setup, m) {
     if (!value) return { handled: false, replies: [] };
   } else if (it.answer === 'rating') {
     const n = /^\s*([1-5])\b/.exec(text);
+    if (!n && isOtherMessage(text)) return { handled: false, replies: [], reask: [{ text: `Whenever you're ready: ${it.title}, please reply with a number from *1* (poor) to *5* (great).` }] };
     if (!n) return { handled: true, replies: [{ text: 'Please reply with a number from 1 to 5.' }] };
     value = n[1];
   } else if (it.answer === 'date') {
     const doj = (cand.profile && cand.profile.doj) || '';
     value = parseDate(text, +(doj.slice(0, 4)) || new Date().getUTCFullYear());
+    if (!value && isOtherMessage(text)) return { handled: false, replies: [], reask: [{ text: `Whenever you're ready, please also send the date for "${it.title}", like 25/11/2026.` }] };
     if (!value) return { handled: true, replies: [{ text: 'Sorry, I could not read that date. Please send it like 25/11/2026.' }] };
   } else if (it.answer === 'text') value = text.slice(0, 500);
   else return { handled: false, replies: [] };

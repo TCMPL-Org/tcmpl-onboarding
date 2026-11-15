@@ -49,11 +49,13 @@ async function route(m, store) {
   return '';
 }
 
-async function runTicks(store, now = Date.now()) {
+// deadline (ms timestamp): modules stop starting new work after it, so the whole run stays inside the API time limit.
+async function runTicks(store, now = Date.now(), deadline = 0) {
   const out = {};
   for (const [name, mod] of MODULES) {
     if (typeof mod.tick !== 'function') continue;
-    try { out[name] = await mod.tick(store, now); } catch (e) { out[name] = { ok: false, error: String(e && e.message || e).slice(0, 200) }; }
+    if (deadline && Date.now() > deadline) { out[name] = { ok: true, skipped: 'time' }; continue; }
+    try { out[name] = await mod.tick(store, now, { deadline }); } catch (e) { out[name] = { ok: false, error: String(e && e.message || e).slice(0, 200) }; }
   }
   return out;
 }

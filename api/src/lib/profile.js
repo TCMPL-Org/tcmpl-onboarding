@@ -1,4 +1,5 @@
 'use strict';
+const { isOtherMessage } = require('./answers');
 // Personal details the joining forms need that no document shows, asked on WhatsApp one at a time,
 // plus the candidate's confirmation of the filled forms.
 //
@@ -215,6 +216,7 @@ function onInbound(cand, m) {
   const step = STEPS.find(s => s.key === d.step);
   if (!step) { d.step = null; return { handled: false, replies: [] }; }
   const err = step.handle(text, d, cand);
+  if (err && isOtherMessage(text)) return { handled: false, replies: [], reask: [ask(d, cand, step)] };
   if (err) return { handled: true, replies: [{ text: err }] };
   infer(d, cand);
   const nx = nextStep(d, cand, step.key);

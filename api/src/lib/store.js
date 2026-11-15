@@ -52,6 +52,15 @@ const cosmosStore = {
       .fetchAll();
     return resources.map(toRecord);
   },
+  // One candidate's records (messages, documents) without reading the whole collection.
+  async listByCandidate(col, candidateId) {
+    const { records } = await cosmos();
+    const pk = `${tenant()}|${col}`;
+    const { resources } = await records.items
+      .query({ query: 'SELECT * FROM c WHERE c.pk = @pk AND c.data.candidateId = @cid', parameters: [{ name: '@pk', value: pk }, { name: '@cid', value: String(candidateId) }] }, { partitionKey: pk })
+      .fetchAll();
+    return resources.map(toRecord);
+  },
   async get(col, id) {
     const { records } = await cosmos();
     const pk = `${tenant()}|${col}`;
@@ -95,6 +104,7 @@ const mem = new Map();
 const memoryStore = {
   kind: 'memory',
   async list(col) { return [...mem.values()].filter(x => x.col === col).map(toRecord); },
+  async listByCandidate(col, candidateId) { return [...mem.values()].filter(x => x.col === col && x.data && x.data.candidateId === candidateId).map(toRecord); },
   async get(col, id) { const x = mem.get(`${col}|${id}`); return x ? toRecord(x) : null; },
   async put(col, id, data, user) {
     const now = new Date().toISOString();
