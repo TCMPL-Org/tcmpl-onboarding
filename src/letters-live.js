@@ -34,7 +34,7 @@ const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.doc
 
 /* ---------- where values come from ---------- */
 const SOURCES = [
-  ['Candidate', [['cand.name', 'Full name'], ['cand.first', 'First name'], ['cand.role', 'Designation'], ['cand.dept', 'Department'], ['cand.grade', 'Grade'], ['cand.doj', 'Joining date'], ['cand.mgr', 'Reporting manager'], ['cand.email', 'Email'], ['cand.mobile', 'Mobile'], ['cand.state', 'Work state'], ['cand.city', 'Work city']]],
+  ['Candidate', [['cand.name', 'Full name'], ['cand.first', 'First name'], ['cand.role', 'Designation'], ['cand.dept', 'Department'], ['cand.grade', 'Grade'], ['cand.doj', 'Joining date'], ['cand.dob', 'Date of birth'], ['cand.mgr', 'Reporting manager'], ['cand.email', 'Email'], ['cand.mobile', 'Mobile'], ['cand.state', 'Work state'], ['cand.city', 'Work city']]],
   ['Offer and salary', [['offer.date', 'Letter date (day it is made)'], ['offer.ctc', 'Annual CTC'], ['offer.ctcMonthly', 'Monthly CTC'], ['offer.ctcWords', 'Annual CTC in words'], ['offer.gross', 'Annual gross'], ['offer.grossMonthly', 'Monthly gross'], ['offer.takeHome', 'Monthly take-home']]],
   ['Client setup', [['client.company', 'Company name'], ['client.short', 'Short company name'], ['client.address', 'Company address'], ['client.location', 'Place of posting'], ['client.probation', 'Probation period'], ['client.noticeProbation', 'Notice during probation'], ['client.noticeConfirmed', 'Notice after confirmation'], ['client.workWeek', 'Work week'], ['client.holidays', 'Holidays a year'], ['client.retirementAge', 'Retirement age'], ['client.jurisdiction', 'Courts with jurisdiction']]],
   ['Signatory', [['sig.name', 'Signatory name'], ['sig.designation', 'Signatory designation']]],
@@ -47,7 +47,7 @@ const AUTO = [
   [/SIGNATORY.*(DESIG|TITLE)/, 'sig.designation'], [/SIGNATORY/, 'sig.name'],
   [/^(CANDIDATE|EMPLOYEE)_?NAME$|^NAME$|^FULL_NAME$/, 'cand.name'], [/FIRST_?NAME/, 'cand.first'],
   [/^(CANDIDATE_|EMPLOYEE_)?DESIGNATION$|^ROLE$|^POSITION$/, 'cand.role'], [/DEPARTMENT|^DEPT$/, 'cand.dept'], [/^(JOB_)?GRADE$|^BAND$|^LEVEL$/, 'cand.grade'],
-  [/JOINING_DATE|DATE_OF_JOINING|^DOJ$|JOIN_DATE/, 'cand.doj'], [/REPORTING_MANAGER|^MANAGER(_NAME)?$|REPORTING_TO/, 'cand.mgr'],
+  [/JOINING_DATE|DATE_OF_JOINING|^DOJ$|JOIN_DATE/, 'cand.doj'], [/BIRTH|^DOB$/, 'cand.dob'], [/REPORTING_MANAGER|^MANAGER(_NAME)?$|REPORTING_TO/, 'cand.mgr'],
   [/^(CANDIDATE_|PERSONAL_)?E_?MAIL$/, 'cand.email'], [/^(CANDIDATE_)?(MOBILE|PHONE)/, 'cand.mobile'],
   [/^(CURRENT|LETTER|OFFER|ISSUE)_DATE$|^TODAY$|^DATE$/, 'offer.date'], [/CTC.*WORDS/, 'offer.ctcWords'], [/MONTHLY_CTC|CTC_MONTHLY/, 'offer.ctcMonthly'],
   [/^(ANNUAL_|TOTAL_|YEARLY_)?CTC$/, 'offer.ctc'], [/MONTHLY_GROSS|GROSS_MONTHLY/, 'offer.grossMonthly'], [/^(ANNUAL_)?GROSS(_SALARY)?$/, 'offer.gross'], [/TAKE_?HOME|NET_SALARY/, 'offer.takeHome'],
@@ -117,7 +117,7 @@ function valuesFor(t, data, sig) {
     const x = m[f.name] || autoMap(f.name);
     const [grp, key] = x.src.split('.');
     let v;
-    if (grp === 'cand') v = key === 'doj' ? fmtDate(c.doj, fmt) : c[key];
+    if (grp === 'cand') v = key === 'doj' || key === 'dob' ? (c[key] ? fmtDate(c[key], fmt) : '') : c[key];
     else if (grp === 'offer') v = { date: fmtDate(new Date(), fmt), ctc: money(data.ctc), ctcMonthly: money(data.ctc / 12), ctcWords: inWords(data.ctc), gross: money(data.gross), grossMonthly: money(data.gross / 12), takeHome: money(data.takeHome) }[key];
     else if (grp === 'client') v = key === 'location' ? (cv('location') || c.city || c.state) : cv(CLIENT_KEY[key] || key);
     else if (grp === 'custom') { const it = (data.customLetter || []).find(z => z.slug === key); v = it ? it.value : ''; }
@@ -347,7 +347,7 @@ function payloadFor(t, final) {
   if (!data) return null;
   const s = sigs.find(x => x.id === sigPick[t.id]);
   const { fields, tables } = valuesFor(t, data, s && s.data);
-  return { id: t.id, client: data.clientId, fields, tables, signatoryId: s ? s.id : '', final: Boolean(final), password: data.password || '', fileName: data.fileBase, candidate: { name: data.c.name, mobile: data.c.mobile } };
+  return { id: t.id, client: data.clientId, fields, tables, signatoryId: s ? s.id : '', final: Boolean(final), password: final ? data.password || '' : '', fileName: data.fileBase, candidate: { name: data.c.name, mobile: data.c.mobile } };
 }
 
 function schedule() { clearTimeout(timer); timer = setTimeout(preview, 600); }

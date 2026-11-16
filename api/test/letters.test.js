@@ -168,7 +168,7 @@ test('PDF password protection: AES-128, opens only with the password', async () 
   page.drawText('Offer letter for Ritika', { x: 20, y: 100, size: 14, font: await d.embedFont(StandardFonts.Helvetica) });
   d.setTitle('Offer letter');
   const plain = Buffer.from(await d.save());
-  const locked = await pdfLock.lock(plain, '12012026');
+  const locked = await pdfLock.lock(plain, '05031998');
   const s = locked.toString('latin1');
   assert.match(s, /\/Encrypt \d+ 0 R/);
   assert.match(s, /\/CFM \/AESV2/);

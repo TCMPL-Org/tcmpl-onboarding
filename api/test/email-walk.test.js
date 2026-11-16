@@ -128,7 +128,7 @@ test('candidate gets an email copy of WhatsApp sends: offer letter attached with
   assert.equal(m.recipients.to[0].address, 'ravi@example.com');
   assert.equal(m.recipients.cc[0].address, 'clienthr@example.com');
   assert.equal(m.attachments[0].name, 'Offer.pdf');
-  assert.match(m.content.plainText, /MMDDYYYY/);
+  assert.match(m.content.plainText, /date of birth as DDMMYYYY/);
   const href = /href="([^"]+)"[^>]*>Accept offer/.exec(m.content.html);
   const page = await handlers.confirmLink({ token: new URL(href[1].replace(/&amp;/g, '&')).searchParams.get('t') });
   assert.match(page.body, /acceptance is recorded/);

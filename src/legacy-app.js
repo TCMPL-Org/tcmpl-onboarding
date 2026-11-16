@@ -204,7 +204,7 @@ function parseCsv(txt){ const out=[]; let row=[],f='',q=false; for(let i=0;i<txt
 const ascii=s=>String(s??'').replace(/₹/g,'Rs. ').replace(/[–—]/g,'-').replace(/[‘’]/g,"'").replace(/[“”]/g,'"').replace(/[·•]/g,'-').replace(/…/g,'...').replace(/✓/g,'(confirmed)').replace(/[^\x00-\x7E]/g,'');
 function makePdf(title,blocks,footer,password){
   const J=window.jspdf&&window.jspdf.jsPDF; if(!J){ toast('PDF tool is still loading. Try again in a moment.'); return null; }
-  // password: the PDF opens only with it (the offer letter uses the joining date as MMDDYYYY).
+  // password: the PDF opens only with it (the offer letter uses the candidate's date of birth as DDMMYYYY).
   const doc=new J(Object.assign({unit:'pt',format:'a4'},password?{encryption:{userPassword:String(password),ownerPassword:String(password)+'-tcmpl-owner',userPermissions:['print','copy']}}:{})); const W=doc.internal.pageSize.getWidth(), H=doc.internal.pageSize.getHeight(), M=50; let y=M;
   const need=h=>{ if(y+h>H-M){ doc.addPage(); y=M; } };
   doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.splitTextToSize(ascii(title),W-2*M).forEach(l=>{need(18);doc.text(l,M,y);y+=18;}); y+=6;
@@ -354,7 +354,7 @@ const OFFER_DATE=new Date(2026,10,2);
 Object.keys(RULES.pt).forEach(s=>{const o=document.createElement('option');o.textContent=s;$('#oState').append(o);});
 const CITY={Haryana:'Gurugram',Delhi:'New Delhi','Uttar Pradesh':'Noida',Rajasthan:'Jaipur',Karnataka:'Bengaluru',Maharashtra:'Mumbai','Tamil Nadu':'Chennai',Telangana:'Hyderabad','West Bengal':'Kolkata',Gujarat:'Ahmedabad'};
 let salMode='tc', manRows=[], anchor={k:'AC',v:960000}, lastOffer=null, tplSel='std-offer';
-function fillOffer(){ const c=DEMO_CAND[client.id]; $('#oName').value=c.name; $('#oMobile').value=c.mobile; $('#oEmail').value=c.email; $('#oRole').value=c.role; $('#oDept').value=team().dept; $('#oGrade').value=c.grade; $('#oState').value=c.state; $('#oMgr').value=c.mgr; $('#oDoj').value='2026-12-01'; $('#oIsMgr').checked=false;
+function fillOffer(){ const c=DEMO_CAND[client.id]; $('#oName').value=c.name; $('#oMobile').value=c.mobile; $('#oEmail').value=c.email; $('#oRole').value=c.role; $('#oDept').value=team().dept; $('#oGrade').value=c.grade; $('#oState').value=c.state; $('#oMgr').value=c.mgr; $('#oDoj').value='2026-12-01'; if($('#oDob')) $('#oDob').value='1996-05-14'; $('#oIsMgr').checked=false;
   refreshStructSel(c.struct); applyStructDefaults(); anchor={k:'AC',v:c.ctc}; refreshTplSel('std-offer');
   tcDefaults(Math.round((c.ctc||0)/12)); setSalMode('tc'); }
 function refreshStructSel(keep){ const sel=$('#oStruct'); const v=keep||sel.value; sel.innerHTML=allStructs().map(s=>`<option value="${esc(s.id)}">${esc(s.name)}${s.builtin?'':' (saved)'}</option>`).join(''); if(allStructs().some(s=>s.id===v)) sel.value=v; }
@@ -410,7 +410,7 @@ function solve(){
   if(k==='AG') return fwd(v,st,set); if(k==='MG') return fwd(v*12,st,set);
   const target=k==='MC'?v*12:v; let lo=0,hi=target; for(let i=0;i<60;i++){ const mid=(lo+hi)/2; if(fwd(mid,st,set).ctc>target) hi=mid; else lo=mid; } return fwd(lo,st,set);
 }
-function readCand(){ return {name:$('#oName').value.trim()||'Candidate',mobile:$('#oMobile').value,email:$('#oEmail').value.trim(),role:$('#oRole').value.trim()||'Role',dept:$('#oDept').value.trim(),grade:$('#oGrade').value,state:$('#oState').value,mgr:$('#oMgr').value.trim()||cv('managerName'),doj:$('#oDoj').value||'2026-12-01',isMgr:$('#oIsMgr').checked}; }
+function readCand(){ return {dob:($('#oDob')||{}).value||'',name:$('#oName').value.trim()||'Candidate',mobile:$('#oMobile').value,email:$('#oEmail').value.trim(),role:$('#oRole').value.trim()||'Role',dept:$('#oDept').value.trim(),grade:$('#oGrade').value,state:$('#oState').value,mgr:$('#oMgr').value.trim()||cv('managerName'),doj:$('#oDoj').value||'2026-12-01',isMgr:$('#oIsMgr').checked}; }
 function renderMan(){ const tot=manRows.reduce((a,r)=>a+(+r.amt||0),0);
   $('#manTbl').innerHTML='<tr><th>Component</th><th class="num">Monthly (₹)</th><th>Basic for PF</th><th></th></tr>'+manRows.map((r,i)=>`<tr><td><input type="text" data-mn="${i}" value="${esc(r.name)}" aria-label="Component name"></td><td class="num"><input type="number" data-ma="${i}" value="${Math.round(+r.amt||0)}" step="100" style="width:120px;text-align:right" aria-label="Monthly amount"></td><td><input type="radio" name="manBasic" data-mb="${i}" ${r.isBasic?'checked':''} aria-label="Basic for PF"></td><td><button class="btn small" data-mx="${i}" aria-label="Remove">Remove</button></td></tr>`).join('')+`<tr style="font-weight:600"><td>Monthly gross</td><td class="num">${inr(tot)}</td><td></td><td></td></tr>`;
   $$('#manTbl [data-mn]').forEach(e=>e.oninput=()=>{manRows[+e.dataset.mn].name=e.value;renderOffer(true);});
@@ -466,15 +466,17 @@ function renderLetter(){ if(!lastOffer) return; if(isDocxTpl()){ if(window.tcmpl
   $('#letterPrev').innerHTML=blocks.map(b=>b.t==='h'?`<h4>${esc(b.text)}</h4>`:b.t==='p'?`<p>${esc(b.text)}</p>`:b.t==='table'?`<table class="lt">${b.rows.map((r,i)=>`<tr>${r.map(x=>i===0?`<th>${esc(x)}</th>`:`<td>${esc(x)}</td>`).join('')}</tr>`).join('')}</table>`:'<div class="gap"></div>').join(''); }
 function letterFile(){ return `Offer_Letter_${lastOffer.c.name.replace(/\W+/g,'_')}`; }
 function letterPdfBlob(password){ const {blocks,tpl}=letterBlocks(); return makePdf(tpl.id==='std-intern'?'Internship letter':'Offer-cum-appointment letter',blocks.filter(b=>b.t!=='gap'),'Generated by the AI Onboarding Agent (demo). Sample data.',password); }
-// Offer letters on WhatsApp are password-protected with the joining date as MMDDYYYY (e.g. 1 Dec 2026 -> 12012026), unless switched off for the client.
-function letterPassword(){ if(cv('letterUnprotected')===true) return ''; const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(readCand().doj||'')); return m?m[2]+m[3]+m[1]:''; }
+// Offer letters are password-protected with the candidate's date of birth as DDMMYYYY (e.g. 5 Mar 1998 -> 05031998), unless switched off for the client.
+// The date of birth is used only to lock the PDF; it is not saved with the offer.
+const letterLocked=()=>cv('letterUnprotected')!==true;
+function letterPassword(){ if(!letterLocked()) return ''; const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(($('#oDob')||{}).value||'')); return m?m[3]+m[2]+m[1]:''; }
 async function downloadLetterPdf(){ const b=letterPdfBlob(); if(b) await saveFile(letterFile()+'.pdf',b,'application/pdf'); }
 $('#dlPdf').onclick=()=>{ if(isDocxTpl()&&window.tcmplDocxDownload) return window.tcmplDocxDownload('pdf'); return downloadLetterPdf(); };
 $('#dlWord').onclick=()=>{ if(isDocxTpl()&&window.tcmplDocxDownload) return window.tcmplDocxDownload('docx'); const {blocks}=letterBlocks(); const body=blocks.map(b=>b.t==='h'?`<h3 style="font-family:Calibri;font-size:12pt">${esc(b.text)}</h3>`:b.t==='p'?`<p style="font-family:Calibri;font-size:11pt">${esc(b.text)}</p>`:b.t==='table'?`<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;font-family:Calibri;font-size:10pt">${b.rows.map((r,i)=>`<tr>${r.map(x=>`<${i?'td':'th'}>${esc(x)}</${i?'td':'th'}>`).join('')}</tr>`).join('')}</table>`:'').join('');
   saveFile(letterFile()+'.doc',`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>Offer letter</title></head><body>${body}</body></html>`,'application/msword'); };
 /* events */
 ['MG','AG','MC','AC'].forEach(k=>$('#f'+k).addEventListener('input',e=>{ if(salMode!=='struct') return; anchor={k,v:+e.target.value||0}; renderOffer(); }));
-['#oName','#oRole','#oDept','#oVar','#oPf','#oNps','#oGrat','#oState','#oDoj','#oMgr','#oGrade','#oEmail','#oIsMgr','#oTpl'].forEach(s=>$(s).addEventListener('input',()=>renderOffer()));
+['#oName','#oRole','#oDept','#oVar','#oPf','#oNps','#oGrat','#oState','#oDoj','#oDob','#oMgr','#oGrade','#oEmail','#oIsMgr','#oTpl'].forEach(s=>$(s).addEventListener('input',()=>renderOffer()));
 $('#oStruct').onchange=()=>{ applyStructDefaults(); renderOffer(); };
 $('#smStruct').onclick=()=>{ setSalMode('struct'); renderOffer(); };
 $('#smTC').onclick=()=>{ tcFillStates(); if(!(+$('#tcAmt').value)) tcDefaults(Math.round((lastOffer&&lastOffer.r?lastOffer.r.ctc:anchor.v||0)/12)); setSalMode('tc'); renderOffer(); };
@@ -490,6 +492,7 @@ $('#saveStruct').onclick=async()=>{ const nm=$('#structName')?$('#structName').v
 $('#modeMake').onclick=()=>setMode('make'); $('#modeUpload').onclick=()=>setMode('upload');
 function setMode(m){ $('#modeMake').setAttribute('aria-pressed',m==='make'); $('#modeUpload').setAttribute('aria-pressed',m==='upload'); $('#makePane').hidden=m!=='make'; $('#uploadPane').hidden=m!=='upload'; }
 $('#releaseOffer').onclick=async()=>{ renderOffer();
+  if(letterLocked()&&!letterPassword()){ toast("Add the candidate's date of birth: the offer letter PDF is locked with it (DDMMYYYY)."); const d=$('#oDob'); if(d){ d.focus(); d.scrollIntoView({block:'center'}); } return; }
   // A Word template: the server fills it, adds the signature and makes the PDF; nothing is released if anything is missing.
   let W=null; if(isDocxTpl()){ if(!window.tcmplDocxFinal){ toast('Word letters are still loading. Try again in a moment.'); return; } W=await window.tcmplDocxFinal(); if(!W) return; }
   const c=fromOffer(); const fl=(()=>{ try{ return window.tcmplFlowFor?window.tcmplFlowFor(client.id,c):null; }catch(e){ return null; } })(); if(fl) c.flow=fl.id; startCandidate(c); showTab('journey');

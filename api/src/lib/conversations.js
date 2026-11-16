@@ -151,9 +151,9 @@ async function startForOffer(p, user) {
 const ACCEPT = /^\s*(yes,? and )?i? ?accept/i;
 const DECLINE = /^\s*(i )?(decline|want to decline|reject)\b/i;
 
-// The letter is locked with the joining date (MMDDYYYY); the caption says how, never the password itself.
+// The letter is locked with the candidate's date of birth (DDMMYYYY); the caption says how, never the password itself.
 function letterNote(cand) {
-  return cand.letterProtected ? '\n\nThe PDF is password-protected: the password is your joining date as MMDDYYYY (for example, 15 January 2027 would be 01152027).' : '';
+  return cand.letterProtected ? '\n\nThe PDF is password-protected: the password is your date of birth as DDMMYYYY (for example, 5 March 1998 would be 05031998).' : '';
 }
 
 async function handleInboundCore(m) {

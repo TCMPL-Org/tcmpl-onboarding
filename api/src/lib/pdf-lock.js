@@ -2,7 +2,7 @@
 // Password-protects a finished PDF (the offer letter Microsoft 365 made from the Word template).
 // Standard security handler, revision 4, AES-128 (AESV2): opens in every PDF reader and asks for the password.
 // The owner password is random and never stored; the open password is what the candidate is told
-// (their joining date as MMDDYYYY).
+// (their date of birth as DDMMYYYY).
 
 const crypto = require('crypto');
 const { PDFDocument, PDFName, PDFNumber, PDFString, PDFHexString, PDFDict, PDFArray, PDFRawStream, PDFBool } = require('pdf-lib');
