@@ -126,3 +126,22 @@ test('answers, HR items and a summary are read from the transcript after the cal
   assert.match(m.text, /For HR: Wants to know about night shifts/);
   assert.ok((await store.get('candidates', id)).data.handovers.some(h => /night shifts/.test(h.why)));
 });
+
+test('call history: speed figures kept, and HR can list the calls of one candidate', async () => {
+  const store = getStore();
+  const id = 'wa-919876500011';
+  await store.put('candidates', id, { phone: '919876500011', name: 'Ravi Kumar', first: 'Ravi', profile: { client: 'northpeak', doj: '2026-12-01' } }, user);
+  const a = await calls.start({ candidateId: id, purpose: 'eve' }, user);
+  const b = await calls.start({ candidateId: 'wa-917623026914', purpose: 'general' }, user, {});
+  await calls.result({ callId: a.body.callId, status: 'answered', durationSec: 95, transcript: [{ role: 'agent', text: 'Hi Ravi' }, { role: 'candidate', text: 'Hello' }],
+    stats: { turns: 6, avgReplySec: 1.234, maxReplySec: 2.5, fillers: 2, model: 'gpt-4.1-mini', junk: 'x' } }, 'call-secret-for-tests');
+  const call = (await store.get('calls', a.body.callId)).data;
+  assert.deepEqual(call.stats, { turns: 6, avgReplySec: 1.23, maxReplySec: 2.5, fillers: 2, model: 'gpt-4.1-mini' });
+  const r = await handlers.data({ method: 'GET', col: 'calls', user, candidateId: id });
+  const items = r.jsonBody.items.map(i => i.data);
+  assert.ok(items.length >= 1 && items.every(c => c.candidateId === id));
+  assert.ok(items.some(c => c.callId === a.body.callId && c.transcript.length === 2));
+  assert.ok(!items.some(c => b.body && c.callId === b.body.callId));
+  // calls cannot be changed from the browser
+  assert.equal((await handlers.data({ method: 'PUT', col: 'calls', id: a.body.callId, body: {}, user })).status, 403);
+});

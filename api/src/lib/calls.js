@@ -165,6 +165,14 @@ function keyOk(key) {
   return Boolean(want) && a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// How the call went technically (sent by the voice agent): reply speed, fillers, the model used.
+function cleanStats(o) {
+  if (!o || typeof o !== 'object') return null;
+  const num = v => (v !== null && v !== undefined && v !== '' && Number.isFinite(+v) && +v >= 0 ? Math.round(+v * 100) / 100 : null);
+  const out = { turns: num(o.turns), avgReplySec: num(o.avgReplySec), maxReplySec: num(o.maxReplySec), fillers: num(o.fillers), model: str(o.model, 60) };
+  return Object.values(out).some(v => v !== null && v !== '') ? out : null;
+}
+
 function cleanMap(o, n) {
   const out = {};
   for (const [k, v] of Object.entries(o && typeof o === 'object' ? o : {}).slice(0, n)) out[String(k).slice(0, 60)] = String(v).slice(0, 300);
@@ -193,7 +201,8 @@ async function result(body, key) {
   const summary = str(got && got.summary, 300);
   Object.assign(call, {
     status, sipStatus: str(body.sipStatus, 120), answeredAt: body.answeredAt || null, endedAt: body.endedAt || new Date().toISOString(),
-    durationSec: Math.max(0, Math.min(3600, +body.durationSec || 0)), language: str(body.language, 10), answers, flags, callback, summary, transcript
+    durationSec: Math.max(0, Math.min(3600, +body.durationSec || 0)), language: str(body.language, 10), answers, flags, callback, summary, transcript,
+    stats: cleanStats(body.stats)
   });
   await store.put('calls', callId, call, SYSTEM);
 

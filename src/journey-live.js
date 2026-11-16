@@ -50,7 +50,7 @@ let readyTpl = [];
 
 const IND_ST = { done: ['✓ Done', 'ok'], sent: ['Waiting for candidate', 'info'], not_yet: ['Not yet, will ask again', 'warn'], rescheduled: ['Rescheduled', 'info'], escalated: ['Needs HR: not confirmed', 'bad'], help: ['Needs HR: candidate asked for help', 'bad'], retry: ['Quiz not passed yet', 'warn'], failed: ['Needs HR: quiz not passed', 'bad'], skipped: ['Skipped', ''] };
 
-let ckSetups = {}, cands = [], selected = null, plan = [], steps = [], sel = null, msgs = [], lastSig = '', docs = [], docEdit = null, health = {}, preview = null, plans = {}, missingQ = null;
+let ckSetups = {}, cands = [], selected = null, plan = [], steps = [], sel = null, msgs = [], lastSig = '', docs = [], docEdit = null, health = {}, preview = null, plans = {}, missingQ = null, callsList = [];
 
 function fmtDate(iso) {
   if (!iso) return '';
@@ -124,9 +124,10 @@ function mount() {
       <div class="card" style="margin-top:16px" id="jlFacts"></div>
     </div>
   </div>
+  <div class="card jl-calls" id="jlCalls" style="margin-top:16px;display:none"></div>
   <div id="jlDemoBar" class="card" style="padding:8px 14px;margin-bottom:12px;display:none"><label class="note" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="jlDemo2" checked> Demo mode: simulated journey for presentations. Untick to work with real candidates.</label></div>`;
   intro.after(wrap);
-  $('#jlCand').onchange = () => { selected = $('#jlCand').value; sel = null; preview = null; lastSig = ''; docs = []; docEdit = null; missingQ = null; renderAll(); loadMsgs(true); loadDocs(); };
+  $('#jlCand').onchange = () => { selected = $('#jlCand').value; sel = null; preview = null; lastSig = ''; docs = []; docEdit = null; missingQ = null; callsList = []; renderAll(); loadMsgs(true); loadDocs(); loadCalls(); };
   $('#jlRefresh').onclick = () => reload(selected);
   $('#jlCall').onclick = callNow;
   $('#jlNext').onclick = () => { const n = nextStep(); if (n) selectStep(n.id, true); };
@@ -148,6 +149,7 @@ function applyMode() {
   show($('#jlStages'), !demo && cands.length > 0);
   show($('#jlGrid'), !demo && cands.length > 0);
   show($('#jlEmpty'), !demo && cands.length === 0);
+  show($('#jlCalls'), !demo && cands.length > 0);
   show($('#jlDemoBar'), demo);
   if ($('#jlDemo')) $('#jlDemo').checked = demo;
   if ($('#jlDemo2')) $('#jlDemo2').checked = demo;
@@ -188,6 +190,7 @@ async function reload(want, stepId) {
   loadMsgs(true);
   loadDocs();
   loadMissing();
+  loadCalls();
 }
 
 async function loadPlan(c) {
@@ -230,7 +233,7 @@ async function loadMsgs(force) {
   if (!force) {
     const r2 = await u.getJson('/api/data/candidates/' + encodeURIComponent(selected)).catch(() => ({ ok: false }));
     if (r2.ok) { const i = cands.findIndex(c => c.id === selected); if (i >= 0) cands[i] = Object.assign({ id: selected }, r2.body.data); }
-    await loadDocs(); loadMissing(); rerender();
+    await loadDocs(); loadMissing(); loadCalls(); rerender();
   }
 }
 
@@ -408,6 +411,7 @@ function renderAll() {
   show($('#jlEmpty'), !demoOn() && none);
   show($('#jlGrid'), !demoOn() && !none);
   show($('#jlStages'), !demoOn() && !none);
+  show($('#jlCalls'), !demoOn() && !none);
   show($('.jl-top'), !demoOn());
   ['#jlCand', '#jlNext'].forEach(q => { $(q).disabled = none; });
   const c = current();
@@ -854,6 +858,70 @@ function renderChat() {
   box.scrollTop = box.scrollHeight;
 }
 
+/* ---------- call history ---------- */
+// Every AI phone call of this candidate, newest first, with its outcome and the full transcript (stored in the app).
+async function loadCalls() {
+  const u = U(); if (!u || !selected) { callsList = []; renderCalls(); return; }
+  const want = selected;
+  const r = await u.getJson('/api/data/calls?candidateId=' + encodeURIComponent(want)).catch(() => ({ ok: false }));
+  if (!r.ok || want !== selected) return;
+  callsList = (r.body.items || []).map(i => i.data).filter(c => c && c.candidateId === selected).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  renderCalls();
+}
+
+const CALL_ST = { answered: ['Answered', 'ok'], no_answer: ['Not answered', 'warn'], busy: ['Busy', 'warn'], declined: ['Declined', 'bad'], failed: ['Could not connect', 'bad'], dialing: ['Calling…', 'info'] };
+const mmss = s => `${Math.floor((+s || 0) / 60)}:${String((+s || 0) % 60).padStart(2, '0')}`;
+const callWhen = t => t ? new Date(t).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+
+function callStatus(k) {
+  if (k.status === 'dialing' && Date.now() - Date.parse(k.at) > 15 * 60000) return ['No result received', 'bad'];
+  return CALL_ST[k.status] || [k.status || '—', ''];
+}
+
+function transcriptText(k) {
+  const c = current() || {};
+  const head = [`${k.title || 'Call'} · ${c.name || k.candidateId} · ${callWhen(k.at)}`, `Status: ${callStatus(k)[0]}${k.durationSec ? ' · ' + mmss(k.durationSec) : ''}`];
+  if (k.summary) head.push(`Summary: ${k.summary}`);
+  return head.join('\n') + '\n\n' + (k.transcript || []).map(t => `${t.role === 'candidate' ? 'Candidate' : 'Assistant'}: ${t.text}`).join('\n') + '\n';
+}
+
+function renderCalls() {
+  const box = $('#jlCalls'); if (!box) return;
+  const c = current();
+  if (!c) { box.innerHTML = ''; return; }
+  const rows = callsList.map((k, i) => {
+    const [st, cls] = callStatus(k);
+    const answers = Object.entries(k.answers || {}).map(([a, v]) => `<dt>${esc(a.replace(/_/g, ' '))}</dt><dd>${esc(v)}</dd>`).join('');
+    const flags = (k.flags || []).map(f => `<div class="callout" style="margin:6px 0">⚠ For HR: ${esc(f)}</div>`).join('');
+    const sx = k.stats || {};
+    const tech = [k.language ? `Language ${esc(k.language)}` : '', sx.avgReplySec != null ? `replies in ${sx.avgReplySec} s on average (slowest ${sx.maxReplySec} s)` : '',
+      sx.fillers ? `${sx.fillers} filler${sx.fillers > 1 ? 's' : ''}` : '', sx.model ? `AI ${esc(sx.model)}` : '', k.status !== 'answered' && k.sipStatus ? `line: ${esc(k.sipStatus)}` : ''].filter(Boolean).join(' · ');
+    const tr = (k.transcript || []).map(t => `<div class="jl-tr ${t.role === 'candidate' ? 'cand' : 'agent'}"><b>${t.role === 'candidate' ? esc(c.first || 'Candidate') : 'Assistant'}</b> ${esc(t.text)}</div>`).join('');
+    return `<details class="jl-call"${i === 0 ? ' open' : ''}>
+      <summary><span class="chip ${cls}">${esc(st)}</span> <b>${esc(k.title || 'Call')}</b> <span class="note">${esc(callWhen(k.at))}${k.durationSec ? ' · ' + mmss(k.durationSec) : ''} · ${k.auto ? 'automatic' : 'started by ' + esc(k.requestedBy || 'HR')}</span></summary>
+      <div class="jl-call-body">
+        ${k.summary ? `<p style="margin:6px 0"><b>Summary:</b> ${esc(k.summary)}</p>` : ''}
+        ${answers ? `<dl class="kv" style="margin:6px 0">${answers}</dl>` : ''}
+        ${flags}
+        ${k.callback ? `<p style="margin:6px 0">↩ <b>Call back:</b> ${esc(k.callback)}</p>` : ''}
+        ${tech ? `<p class="note" style="margin:6px 0">${tech}</p>` : ''}
+        ${tr ? `<div class="row" style="justify-content:space-between;margin-top:8px"><b>Transcript</b><span><button class="btn small" type="button" data-copy="${i}">Copy</button> <button class="btn small" type="button" data-dl="${i}">Download</button></span></div><div class="jl-trs">${tr}</div>`
+             : `<p class="note" style="margin:6px 0">${k.status === 'dialing' && st === 'Calling…' ? 'The transcript appears here when the call ends.' : 'No conversation on this call.'}</p>`}
+      </div></details>`;
+  }).join('');
+  box.innerHTML = `<div class="row" style="justify-content:space-between"><h3 style="margin:0">📞 Calls${callsList.length ? ` (${callsList.length})` : ''}</h3><button class="btn small" type="button" id="jlCallsRefresh">Refresh</button></div>`
+    + (rows || `<p class="note" style="margin:8px 0 0">No calls yet.${health.calls ? ' Use 📞 Call now at the top: the outcome and the full transcript are saved here.' : ''}</p>`);
+  $('#jlCallsRefresh').onclick = loadCalls;
+  box.querySelectorAll('[data-copy]').forEach(b => { b.onclick = async () => { try { await navigator.clipboard.writeText(transcriptText(callsList[+b.dataset.copy])); U().toast('Transcript copied'); } catch { U().toast('Could not copy'); } }; });
+  box.querySelectorAll('[data-dl]').forEach(b => { b.onclick = () => {
+    const k = callsList[+b.dataset.dl];
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([transcriptText(k)], { type: 'text/plain;charset=utf-8' }));
+    a.download = `call-${(c.name || 'candidate').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${String(k.at || '').slice(0, 10)}.txt`;
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }; });
+}
+
 /* ---------- actions ---------- */
 // The AI voice assistant calls the candidate (LiveKit + Plivo); the outcome and transcript appear in the chat.
 async function callNow() {
@@ -868,7 +936,7 @@ async function callNow() {
   let r = await go(false);
   if (!r.ok && r.body && r.body.error === 'outside_hours' && window.confirm(`${r.body.detail}\nCall anyway?`)) r = await go(true);
   $('#jlCall').disabled = false;
-  if (r.ok) { u.toast(`Calling ${c.name}… The result shows in the chat when the call ends.`); await reload(selected); }
+  if (r.ok) { u.toast(`Calling ${c.name}… The outcome and transcript show under Calls when the call ends.`); await reload(selected); }
   else if (r.body && r.body.error === 'call_in_progress') u.toast('A call to this candidate is still in progress.');
   else if (r.body && r.body.error === 'calls_not_configured') u.toast('Calling is not set up yet (LiveKit settings in Azure).');
   else if (r.body && r.body.error !== 'outside_hours') u.toast('Call not started: ' + (r.body.detail || r.body.error || 'error'));

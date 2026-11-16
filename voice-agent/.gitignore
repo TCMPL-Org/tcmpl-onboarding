@@ -4,3 +4,6 @@
 secrets.env
 __pycache__/
 .venv/
+
+# call logs saved locally while testing (may contain candidate details)
+call-log*.txt

@@ -168,7 +168,9 @@ class CallState:
         self.language = meta.get("language") if meta.get("language") in LANGS else "en-IN"
         self.last_filler = ""
         self.fillers_used = 0
+        self.reply_delays: list[float] = []   # seconds from the candidate stopping to the reply's first audio
         self.posted = False
+        self.post_task: asyncio.Task | None = None
 
 
 class OnboardingCaller(Agent):
@@ -181,6 +183,7 @@ class OnboardingCaller(Agent):
         self._turn_kind = "other"
         self._turn_words = 0
         self._filler_for: float | None = None     # the turn that already got its filler
+        self._timed_for: float | None = None      # the turn whose reply delay was already logged
 
     # --- fillers -------------------------------------------------------------------------------------------
     def on_user_state(self, ev) -> None:
@@ -204,6 +207,7 @@ class OnboardingCaller(Agent):
                     self._clips[(language, w)] = split_frames(trim_silence(frame))
                 except Exception as e:  # a missing filler only means no filler
                     logger.warning("filler %r not recorded: %s", w, e)
+        logger.info("fillers ready for %s: %d", language, sum(1 for (lang, _) in self._clips if lang == language))
 
     def _pick_filler(self) -> list[rtc.AudioFrame] | None:
         lang = self.state.language
@@ -245,11 +249,19 @@ class OnboardingCaller(Agent):
                         if self._filler_due():
                             self._filler_for = self._turn_done_at
                             clip = self._pick_filler()
+                            if clip:
+                                logger.info("filler %r (%s) %.2fs after the candidate stopped", self.state.last_filler,
+                                            self._turn_kind, time.monotonic() - self._turn_done_at)
                             for f in clip or []:
                                 yield f
                             waiting = False
                         continue
                     waiting = False
+                    if self._turn_done_at is not None and self._timed_for != self._turn_done_at:
+                        self._timed_for = self._turn_done_at
+                        delay = time.monotonic() - self._turn_done_at
+                        self.state.reply_delays.append(delay)
+                        logger.info("reply audio ready %.2fs after the candidate stopped", delay)
                 f = await getter
                 if f is None:
                     break
@@ -314,6 +326,14 @@ async def post_result(state: CallState, session: AgentSession | None) -> None:
         "flags": state.flags,
         "callback": state.callback,
         "transcript": transcript[-200:],
+        "stats": {
+            "turns": len(state.reply_delays),
+            "avgReplySec": round(sum(state.reply_delays) / len(state.reply_delays), 2) if state.reply_delays else None,
+            "maxReplySec": round(max(state.reply_delays), 2) if state.reply_delays else None,
+            "fillers": state.fillers_used,
+            "model": os.getenv("VOICE_LLM_MODEL", "").strip() or os.getenv("VOICE_LLM_DEPLOYMENT", "").strip()
+                     or os.getenv("AZURE_OPENAI_DEPLOYMENT", ""),
+        },
     }
     if not url or not secret:
         logger.warning("CALL_RESULT_URL / CALL_AGENT_SECRET not set; result only logged: %s", json.dumps(body)[:2000])
@@ -334,7 +354,7 @@ def prewarm(proc: JobProcess) -> None:
     proc.userdata["vad"] = silero.VAD.load(min_silence_duration=0.3)
 
 
-server = AgentServer(setup_fnc=prewarm)
+server = AgentServer(setup_fnc=prewarm, shutdown_process_timeout=30.0)
 
 
 @server.rtc_session(agent_name=AGENT_NAME)
@@ -345,8 +365,13 @@ async def outbound_call(ctx: JobContext) -> None:
     trunk = os.getenv("SIP_OUTBOUND_TRUNK_ID", "")
     session: AgentSession | None = None
 
+    def send_result() -> asyncio.Task:
+        if state.post_task is None:
+            state.post_task = asyncio.create_task(post_result(state, session))
+        return state.post_task
+
     async def on_shutdown(*_):
-        await post_result(state, session)
+        await send_result()
 
     ctx.add_shutdown_callback(on_shutdown)
 
@@ -373,6 +398,8 @@ async def outbound_call(ctx: JobContext) -> None:
     )
     agent = OnboardingCaller(state, tts)
     session.on("user_state_changed", agent.on_user_state)
+    # Send the result the moment the call ends, not only at shutdown (the process may be stopped soon after).
+    session.on("close", lambda _ev: send_result())
 
     # Start the session first so nothing the candidate says after answering is missed.
     session_started = asyncio.create_task(session.start(
