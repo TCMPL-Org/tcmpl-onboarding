@@ -19,6 +19,7 @@ const { getStore } = require('./store');
 const wa = require('./whatsapp');
 const modules = require('./modules');
 const notify = require('./notify');
+const ai = require('./ai');
 
 const SYSTEM = { name: 'voice-agent' };
 const PURPOSES = {
@@ -28,6 +29,25 @@ const PURPOSES = {
   close: '90-day closing call',
   general: 'Call from HR'
 };
+// What each call should find out; read from the transcript after the call (so the agent never pauses to save).
+const FIELDS = {
+  confirm: 'joining_confirmed (yes / no / unsure), resignation_status (submitted / not yet / not applicable), relieving_date (dd/mm/yyyy if said), questions (what they asked)',
+  noreply: 'whatsapp_ok (yes / no / not seen), still_joining (yes / no / unsure), blocker (what is stopping them)',
+  eve: 'coming_tomorrow (yes / no / unsure), needs (anything they need)',
+  close: 'rating (1-5), highlights, concerns',
+  general: 'outcome (one line)'
+};
+
+async function extract(call, transcript) {
+  if (!transcript.length || !ai.aiConfigured()) return null;
+  const lines = transcript.map(t => `${t.role === 'candidate' ? 'Candidate' : 'Agent'}: ${t.text}`).join('\n').slice(0, 12000);
+  const prompt = `This is the transcript of an onboarding phone call (${call.title || 'call'}) between an AI assistant and a candidate. ` +
+    `Return JSON: {"answers": {<field>: <short answer in English>}, "flags": [<things HR must act on: questions the assistant could not answer, doubts about joining, complaints, requests to talk to a person>], ` +
+    `"callback": "<when to call back, if they asked; else empty>", "summary": "<one sentence in English>"}. ` +
+    `Fields to fill (leave out any not discussed): ${FIELDS[call.purpose] || FIELDS.general}. Use only what the candidate actually said.\n\nTranscript:\n${lines}`;
+  try { return await ai.completeJson(prompt); } catch (e) { console.error('call extraction failed', e && e.message); return null; }
+}
+
 const STATUS = { answered: 'answered', no_answer: 'not answered', busy: 'busy', declined: 'declined', failed: 'could not connect', dialing: 'dialing' };
 
 function callsConfigured() {
@@ -163,14 +183,17 @@ async function result(body, key) {
   if (call.endedAt) return { status: 200, body: { ok: true, duplicate: true } };
 
   const status = STATUS[body.status] ? body.status : 'failed';
-  const answers = cleanMap(body.answers, 20);
-  const flags = (Array.isArray(body.flags) ? body.flags : []).map(f => String(f).slice(0, 300)).slice(0, 10);
-  const callback = str(body.callback, 120);
   const transcript = (Array.isArray(body.transcript) ? body.transcript : []).slice(-200)
     .map(t => ({ role: t && t.role === 'candidate' ? 'candidate' : 'agent', text: String((t && t.text) || '').slice(0, 1000) })).filter(t => t.text);
+  const got = status === 'answered' && transcript.some(t => t.role === 'candidate') ? await extract(call, transcript) : null;
+  const answers = cleanMap(Object.assign({}, got && got.answers, body.answers), 20);
+  const flags = [].concat(Array.isArray(body.flags) ? body.flags : [], got && Array.isArray(got.flags) ? got.flags : [])
+    .map(f => String(f).slice(0, 300)).filter(Boolean).slice(0, 10);
+  const callback = str(body.callback, 120) || str(got && got.callback, 120);
+  const summary = str(got && got.summary, 300);
   Object.assign(call, {
     status, sipStatus: str(body.sipStatus, 120), answeredAt: body.answeredAt || null, endedAt: body.endedAt || new Date().toISOString(),
-    durationSec: Math.max(0, Math.min(3600, +body.durationSec || 0)), language: str(body.language, 10), answers, flags, callback, transcript
+    durationSec: Math.max(0, Math.min(3600, +body.durationSec || 0)), language: str(body.language, 10), answers, flags, callback, summary, transcript
   });
   await store.put('calls', callId, call, SYSTEM);
 
@@ -190,6 +213,7 @@ async function result(body, key) {
 
   const mins = call.durationSec ? ` (${Math.floor(call.durationSec / 60)}:${String(call.durationSec % 60).padStart(2, '0')})` : '';
   const lines = [`📞 ${call.title || 'Call'}: ${STATUS[status]}${mins}${status !== 'answered' && call.sipStatus ? ` · ${call.sipStatus}` : ''}`];
+  if (summary) lines.push(summary);
   for (const [k, v] of Object.entries(answers)) lines.push(`• ${k.replace(/_/g, ' ')}: ${v}`);
   for (const f of flags) lines.push(`⚠ For HR: ${f}`);
   if (callback) lines.push(`↩ Call back: ${callback}`);

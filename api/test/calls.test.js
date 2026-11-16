@@ -106,3 +106,23 @@ test('outside calling hours a call needs confirmation', async () => {
   assert.equal(r.body.error, 'outside_hours');
   process.env.CALL_HOURS = '0-24';
 });
+
+test('answers, HR items and a summary are read from the transcript after the call', async () => {
+  const store = getStore();
+  Object.assign(process.env, { AZURE_OPENAI_ENDPOINT: 'https://x.openai.azure.com', AZURE_OPENAI_API_KEY: 'k', AZURE_OPENAI_DEPLOYMENT: 'd' });
+  const id = 'wa-917623026917';
+  await store.put('candidates', id, { phone: '917623026917', name: 'Neha', profile: { client: 'northpeak' } }, user);
+  const s = await calls.start({ candidateId: id, purpose: 'confirm' }, user);
+  const before = global.fetch;
+  global.fetch = async (url) => (String(url).includes('openai.azure.com')
+    ? { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify({ answers: { joining_confirmed: 'yes', resignation_status: 'submitted' }, flags: ['Wants to know about night shifts'], callback: '', summary: 'Neha confirmed joining and has resigned.' }) } }] }) }
+    : before(url));
+  try {
+    await calls.result({ callId: s.body.callId, status: 'answered', durationSec: 70, transcript: [{ role: 'agent', text: 'Have you resigned?' }, { role: 'candidate', text: 'Haan, kar diya. Night shift hogi kya?' }] }, 'call-secret-for-tests');
+  } finally { global.fetch = before; for (const k of ['AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_DEPLOYMENT']) delete process.env[k]; }
+  const m = (await store.get('messages', 'o-' + s.body.callId)).data;
+  assert.match(m.text, /Neha confirmed joining and has resigned\./);
+  assert.match(m.text, /resignation status: submitted/);
+  assert.match(m.text, /For HR: Wants to know about night shifts/);
+  assert.ok((await store.get('candidates', id)).data.handovers.some(h => /night shifts/.test(h.why)));
+});

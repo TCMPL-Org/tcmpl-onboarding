@@ -12,14 +12,19 @@ Secrets / settings (LiveKit Cloud agent secrets, or .env.local when running loca
   CALL_AGENT_SECRET          shared secret, the same value as in the app's Azure settings
   AGENT_NAME                 optional, default tcmpl-onboarding-caller
   VOICE_SPEAKER              optional Sarvam bulbul:v3 speaker, default priya
+  VOICE_LLM_DEPLOYMENT       optional: a faster Azure deployment just for calls (default AZURE_OPENAI_DEPLOYMENT)
+  VOICE_LLM_MODEL            optional: the model behind it, e.g. gpt-4.1-mini or gpt-5-mini (reasoning models are
+                             then asked to think minimally, which removes seconds of delay)
 """
 
 import asyncio
 import json
 import logging
 import os
+import random
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import aiohttp
 from dotenv import load_dotenv
@@ -48,8 +53,23 @@ AGENT_NAME = os.getenv("AGENT_NAME", "tcmpl-onboarding-caller")
 LANGS = {"en-IN", "hi-IN", "mr-IN", "gu-IN", "ta-IN", "te-IN", "kn-IN", "ml-IN", "bn-IN", "pa-IN", "or-IN"}
 
 
+def azure_endpoint() -> str:
+    """Like the app (api/src/lib/ai.js): only https://<host> is used, any path after it is ignored."""
+    raw = os.environ["AZURE_OPENAI_ENDPOINT"].strip()
+    u = urlparse(raw)
+    return f"{u.scheme}://{u.netloc}" if u.scheme and u.netloc else raw.rstrip("/")
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# Short sounds while the answer is being prepared, so the line is never silent.
+FILLERS = {
+    "en-IN": ["Okay…", "Sure…", "Alright…", "Got it…", "Right…"],
+    "hi-IN": ["जी…", "अच्छा…", "ठीक है…", "Okay जी…", "हाँ जी…"],
+}
+FILLER_AFTER = 0.7  # seconds of silence after the candidate stops before a filler is said
 
 
 class CallState:
@@ -65,6 +85,7 @@ class CallState:
         self.flags: list[str] = []
         self.callback = ""
         self.language = meta.get("language") if meta.get("language") in LANGS else "en-IN"
+        self.last_filler = ""
         self.posted = False
 
 
@@ -74,36 +95,19 @@ class OnboardingCaller(Agent):
         self.state = state
         self._tts = tts
 
-    @function_tool()
-    async def record_answer(self, context: RunContext, key: str, value: str) -> str:
-        """Save one piece of information the candidate gave, e.g. key "joining_confirmed", value "yes".
+    async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
+        """The candidate finished speaking: if the reply takes a moment, say a short filler ("Okay…")."""
+        asyncio.create_task(self._filler())
 
-        Args:
-            key: short name of what was answered, e.g. joining_confirmed, resignation_status, relieving_date, rating
-            value: the answer in a few words, in English
-        """
-        self.state.answers[key.strip()[:60]] = value.strip()[:300]
-        return "saved"
-
-    @function_tool()
-    async def flag_for_hr(self, context: RunContext, reason: str) -> str:
-        """Tell HR something needs a person: a question you can't answer, a concern, doubts about joining, or a request to talk to someone.
-
-        Args:
-            reason: one sentence for HR, in English
-        """
-        self.state.flags.append(reason.strip()[:300])
-        return "HR will be told"
-
-    @function_tool()
-    async def request_callback(self, context: RunContext, when: str) -> str:
-        """The candidate can't talk now and asked to be called later.
-
-        Args:
-            when: when to call back, in the candidate's words (e.g. "tomorrow after 6 pm")
-        """
-        self.state.callback = when.strip()[:120]
-        return "noted"
+    async def _filler(self) -> None:
+        await asyncio.sleep(FILLER_AFTER)
+        session = self.session
+        if session.agent_state != "thinking":
+            return  # the reply is already playing
+        words = FILLERS.get(self.state.language, FILLERS["en-IN"])
+        choice = random.choice([w for w in words if w != self.state.last_filler] or words)
+        self.state.last_filler = choice
+        session.say(choice, add_to_chat_ctx=False, allow_interruptions=True)
 
     @function_tool()
     async def switch_language(self, context: RunContext, language: str) -> str:
@@ -203,18 +207,28 @@ async def outbound_call(ctx: JobContext) -> None:
     await ctx.connect()
 
     tts = sarvam.TTS(target_language_code=state.language, model="bulbul:v3",
-                     speaker=meta.get("voice") or os.getenv("VOICE_SPEAKER", "priya"), pace=1.0)
+                     speaker=meta.get("voice") or os.getenv("VOICE_SPEAKER", "priya"), pace=1.05,
+                     min_buffer_size=30)
+    model = os.getenv("VOICE_LLM_MODEL", "").strip()
+    llm_opts = dict(
+        azure_endpoint=azure_endpoint(),
+        azure_deployment=(os.getenv("VOICE_LLM_DEPLOYMENT", "").strip() or os.environ["AZURE_OPENAI_DEPLOYMENT"].strip()),
+        api_key=os.environ["AZURE_OPENAI_API_KEY"].strip(),
+        api_version=os.getenv("AZURE_OPENAI_API_VERSION", "").strip() or "2024-10-21",
+        max_completion_tokens=120,  # phone replies are one or two short sentences
+    )
+    if model:
+        llm_opts["model"] = model  # lets the plugin ask reasoning models (gpt-5…) to think minimally
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        stt=sarvam.STTRealtime(language="auto" if meta.get("language") in (None, "", "auto") else state.language, mode="codemix"),
-        llm=openai.LLM.with_azure(
-            azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-            azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT"],
-            api_key=os.environ["AZURE_OPENAI_API_KEY"],
-            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21"),
-            temperature=0.4,
-        ),
+        stt=sarvam.STTRealtime(language="auto" if meta.get("language") in (None, "", "auto") else state.language,
+                               mode="codemix", stream_type="fast"),
+        llm=openai.LLM.with_azure(**llm_opts),
         tts=tts,
+        turn_handling={
+            "endpointing": {"min_delay": 0.35, "max_delay": 1.8},
+            "preemptive_generation": {"enabled": True, "preemptive_tts": True},
+        },
     )
     agent = OnboardingCaller(state, tts)
 
@@ -247,7 +261,8 @@ async def outbound_call(ctx: JobContext) -> None:
 
     state.status, state.answered_at = "answered", time.time()
     await session_started
-    await session.generate_reply(instructions=scripts.greeting(meta))
+    # The first line is fixed (no AI wait): short, says who is calling, asks for two minutes.
+    session.say(scripts.greeting(meta, state.language))
 
 
 if __name__ == "__main__":
