@@ -28,9 +28,10 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import aiohttp
+import numpy as np
 from dotenv import load_dotenv
 from google.protobuf.duration_pb2 import Duration
-from livekit import api
+from livekit import api, rtc
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -42,6 +43,7 @@ from livekit.agents import (
     function_tool,
     get_job_context,
     room_io,
+    utils,
 )
 from livekit.plugins import openai, sarvam, silero
 
@@ -92,12 +94,63 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# Short sounds while the answer is being prepared, so the line is never silent.
+# Short sounds said only after the candidate has finished speaking, and only while the answer is still being
+# prepared. They are pre-recorded at the start of the call and played as the first part of the reply itself,
+# so a filler can never come after the agent has spoken. The kind of filler follows what the candidate said.
 FILLERS = {
-    "en-IN": ["Okay…", "Sure…", "Alright…", "Got it…", "Right…"],
-    "hi-IN": ["जी…", "अच्छा…", "ठीक है…", "Okay जी…", "हाँ जी…"],
+    "en-IN": {
+        "question": ["Sure…", "Good question…", "Let me tell you…"],
+        "yes": ["Great…", "Okay…", "Alright…"],
+        "problem": ["I understand…", "Okay, got it…"],
+        "other": ["Okay…", "Got it…", "Right…", "Alright…"],
+    },
+    "hi-IN": {
+        "question": ["जी, बताती हूँ…", "Sure…"],
+        "yes": ["बढ़िया…", "Okay जी…", "ठीक है…"],
+        "problem": ["समझ गई…", "अच्छा, ठीक है…"],
+        "other": ["अच्छा…", "ठीक है…", "हाँ जी…", "Okay…"],
+    },
 }
-FILLER_AFTER = 0.45  # seconds after the candidate's turn ends before a filler is said (skipped if the reply is ready)
+FILLER_AFTER = 0.5   # seconds of silence after the candidate stops before a filler is played
+SHORT_AFTER = 1.0    # after a one-word answer ("yes", "haan") wait a little longer: that reply is usually quick
+
+_Q = re.compile(r"\?|^(what|when|where|why|how|which|who|can|could|will|is|are|do|does|kya|kab|kaise|kahan|kitna|kitne|kaun|kyun)\b", re.I)
+_YES = re.compile(r"^(yes|yeah|yep|ok|okay|sure|done|haan|ha|han|ji|hmm|right|correct|theek|thik|bilkul)\b", re.I)
+_PROBLEM = re.compile(r"\b(no|not|nahi|nahin|can't|cannot|won't|problem|issue|delay|late|sorry|mushkil|dikkat)\b", re.I)
+
+
+_Q_HI = ("क्या", "कब", "कैसे", "कहाँ", "कहां", "कितना", "कितने", "कौन", "क्यों")
+_PROBLEM_HI = ("नहीं", "नही", "प्रॉब्लम", "दिक्कत", "मुश्किल", "लेट", "सॉरी")
+_YES_HI = ("हाँ", "हां", "जी", "ठीक", "बिल्कुल", "ओके", "हम्म")
+
+
+def filler_kind(text: str) -> str:
+    t = (text or "").strip()
+    if _Q.search(t) or any(w in t for w in _Q_HI):
+        return "question"
+    if _PROBLEM.search(t) or any(w in t for w in _PROBLEM_HI):
+        return "problem"
+    if _YES.search(t) or t.startswith(_YES_HI):
+        return "yes"
+    return "other"
+
+
+def trim_silence(frame: rtc.AudioFrame, threshold: int = 300) -> rtc.AudioFrame:
+    """Cut the quiet start and end of a recorded filler so it starts the moment it is played."""
+    pcm = np.frombuffer(frame.data, dtype=np.int16).reshape(-1, frame.num_channels)
+    loud = np.where(np.abs(pcm).max(axis=1) > threshold)[0]
+    if loud.size == 0:
+        return frame
+    pad = int(frame.sample_rate * 0.04)
+    start, end = max(0, loud[0] - pad), min(len(pcm), loud[-1] + pad)
+    cut = np.ascontiguousarray(pcm[start:end])
+    return rtc.AudioFrame(cut.tobytes(), frame.sample_rate, frame.num_channels, len(cut))
+
+
+def split_frames(frame: rtc.AudioFrame) -> list[rtc.AudioFrame]:
+    """20 ms frames, like the rest of the reply audio."""
+    bs = utils.audio.AudioByteStream(frame.sample_rate, frame.num_channels, samples_per_channel=frame.sample_rate // 50)
+    return bs.push(bytes(frame.data)) + bs.flush()
 
 
 class CallState:
@@ -114,6 +167,7 @@ class CallState:
         self.callback = ""
         self.language = meta.get("language") if meta.get("language") in LANGS else "en-IN"
         self.last_filler = ""
+        self.fillers_used = 0
         self.posted = False
 
 
@@ -122,20 +176,88 @@ class OnboardingCaller(Agent):
         super().__init__(instructions=scripts.instructions(state.meta))
         self.state = state
         self._tts = tts
+        self._clips: dict[tuple[str, str], list[rtc.AudioFrame]] = {}
+        self._turn_done_at: float | None = None   # when the candidate's last turn ended (None while they talk)
+        self._turn_kind = "other"
+        self._turn_words = 0
+        self._filler_for: float | None = None     # the turn that already got its filler
+
+    # --- fillers -------------------------------------------------------------------------------------------
+    def on_user_state(self, ev) -> None:
+        if ev.new_state == "speaking":
+            self._turn_done_at = None  # a new turn has started: nothing to fill yet
 
     async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
-        """The candidate finished speaking: if the reply takes a moment, say a short filler ("Okay…")."""
-        asyncio.create_task(self._filler())
+        text = new_message.text_content or ""
+        self._turn_kind = filler_kind(text)
+        self._turn_words = len(text.split())
+        self._turn_done_at = time.monotonic()
 
-    async def _filler(self) -> None:
-        await asyncio.sleep(FILLER_AFTER)
-        session = self.session
-        if session.agent_state != "thinking":
-            return  # the reply is already playing
-        words = FILLERS.get(self.state.language, FILLERS["en-IN"])
-        choice = random.choice([w for w in words if w != self.state.last_filler] or words)
+    async def prepare_fillers(self, language: str) -> None:
+        """Record every filler for this language once (a few hundred characters of Sarvam voice)."""
+        for words in FILLERS.get(language, FILLERS["en-IN"]).values():
+            for w in words:
+                if (language, w) in self._clips:
+                    continue
+                try:
+                    frame = await self._tts.synthesize(w).collect()
+                    self._clips[(language, w)] = split_frames(trim_silence(frame))
+                except Exception as e:  # a missing filler only means no filler
+                    logger.warning("filler %r not recorded: %s", w, e)
+
+    def _pick_filler(self) -> list[rtc.AudioFrame] | None:
+        lang = self.state.language
+        options = FILLERS.get(lang, FILLERS["en-IN"])
+        words = [w for w in options.get(self._turn_kind, options["other"]) if (lang, w) in self._clips]
+        if not words:
+            return None
+        fresh = [w for w in words if w != self.state.last_filler] or words
+        choice = random.choice(fresh)
         self.state.last_filler = choice
-        session.say(choice, add_to_chat_ctx=False, allow_interruptions=True)
+        self.state.fillers_used += 1
+        return self._clips[(lang, choice)]
+
+    def _filler_due(self) -> bool:
+        done = self._turn_done_at
+        wait = FILLER_AFTER if self._turn_words >= 2 else SHORT_AFTER
+        return done is not None and self._filler_for != done and time.monotonic() - done >= wait
+
+    async def tts_node(self, text, model_settings):
+        """The reply's audio. If the candidate has stopped speaking and the first words of the reply are not ready
+        within FILLER_AFTER, a short filler is played first, as part of this same reply (never after it)."""
+        frames: asyncio.Queue = asyncio.Queue()
+
+        async def pump() -> None:
+            try:
+                async for f in Agent.default.tts_node(self, text, model_settings):
+                    await frames.put(f)
+            finally:
+                await frames.put(None)
+
+        task = asyncio.create_task(pump())
+        getter = asyncio.ensure_future(frames.get())
+        waiting = True  # still waiting for the first real audio
+        try:
+            while True:
+                if waiting:
+                    done, _ = await asyncio.wait({getter}, timeout=0.05)
+                    if not done:
+                        if self._filler_due():
+                            self._filler_for = self._turn_done_at
+                            clip = self._pick_filler()
+                            for f in clip or []:
+                                yield f
+                            waiting = False
+                        continue
+                    waiting = False
+                f = await getter
+                if f is None:
+                    break
+                yield f
+                getter = asyncio.ensure_future(frames.get())
+        finally:
+            getter.cancel()
+            task.cancel()
 
     @function_tool()
     async def switch_language(self, context: RunContext, language: str) -> str:
@@ -148,6 +270,7 @@ class OnboardingCaller(Agent):
             return "unsupported language, continue in the current one"
         self.state.language = language
         self._tts.update_options(target_language_code=language)
+        asyncio.create_task(self.prepare_fillers(language))
         return f"voice switched to {language}"
 
     @function_tool()
@@ -249,6 +372,7 @@ async def outbound_call(ctx: JobContext) -> None:
         },
     )
     agent = OnboardingCaller(state, tts)
+    session.on("user_state_changed", agent.on_user_state)
 
     # Start the session first so nothing the candidate says after answering is missed.
     session_started = asyncio.create_task(session.start(
@@ -281,6 +405,7 @@ async def outbound_call(ctx: JobContext) -> None:
     await session_started
     # The first line is fixed (no AI wait): short, says who is calling, asks for two minutes.
     session.say(scripts.greeting(meta, state.language))
+    asyncio.create_task(agent.prepare_fillers(state.language))  # recorded while the greeting plays
 
 
 if __name__ == "__main__":
