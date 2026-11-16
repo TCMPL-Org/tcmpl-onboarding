@@ -33,8 +33,10 @@ function css() {
   const st = document.createElement('style');
   st.id = 'lgStyle';
   st.textContent = `
-#lgRoot{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px 16px;background:linear-gradient(160deg,var(--teal-soft) 0%,var(--bg) 45%,var(--blue-soft) 100%)}
-#lgRoot .lg-card{width:100%;max-width:420px;background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:0 18px 50px rgba(18,38,58,.12);padding:28px 28px 22px}
+#lgRoot{--hub:#1E4FA0;--hub-soft:#E6EEF9;--teal:#1E4FA0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px 16px;background:#EEF2F7;font-family:'IBM Plex Sans','Source Sans 3','Segoe UI',sans-serif}
+#lgRoot h1{font-family:inherit;letter-spacing:0}
+#lgRoot input:focus{outline:none;border-color:var(--hub);box-shadow:0 0 0 3px rgba(30,79,160,.18)}
+#lgRoot .lg-card{width:100%;max-width:420px;background:var(--surface);border:1px solid #DCE3EC;border-radius:16px;box-shadow:0 18px 50px rgba(19,40,74,.10);padding:28px 28px 22px}
 #lgRoot .lg-logo{display:flex;justify-content:center;margin-bottom:14px}
 #lgRoot .lg-logo img{height:52px;width:auto;background:#fff;border-radius:10px;padding:6px 10px}
 #lgRoot h1{font-size:1.35rem;text-align:center;margin:0 0 4px}
@@ -42,13 +44,13 @@ function css() {
 #lgRoot label{display:block;font-size:.78rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:12px 0 5px}
 #lgRoot input[type=email],#lgRoot input[type=password],#lgRoot input[type=text]{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface);font-size:1rem}
 #lgRoot .lg-pw{position:relative}
-#lgRoot .lg-pw button{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:0;background:none;color:var(--teal-ink);font-size:.78rem;font-weight:600;padding:6px}
-#lgRoot .lg-btn{width:100%;margin-top:18px;padding:11px;border-radius:9px;border:0;background:var(--teal-ink);color:#fff;font-weight:600;font-size:1rem}
+#lgRoot .lg-pw button{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:0;background:none;color:var(--hub);font-size:.78rem;font-weight:600;padding:6px}
+#lgRoot .lg-btn{width:100%;margin-top:18px;padding:12px;border-radius:10px;border:0;background:var(--hub);color:#fff;font-weight:600;font-size:1rem}
 #lgRoot .lg-btn[disabled]{opacity:.6}
 #lgRoot .lg-alt{width:100%;margin-top:10px;padding:10px;border-radius:9px;border:1px solid var(--line);background:var(--surface);font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;text-decoration:none;color:var(--ink)}
 #lgRoot .lg-or{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:.8rem;margin:16px 0 4px}
 #lgRoot .lg-or::before,#lgRoot .lg-or::after{content:"";flex:1;height:1px;background:var(--line)}
-#lgRoot .lg-link{background:none;border:0;color:var(--teal-ink);font-size:.88rem;padding:0;text-decoration:underline}
+#lgRoot .lg-link{background:none;border:0;color:var(--hub);font-size:.88rem;padding:0;text-decoration:underline}
 #lgRoot .lg-row{display:flex;justify-content:space-between;align-items:center;margin-top:12px}
 #lgRoot .lg-msg{margin-top:12px;font-size:.9rem;border-radius:8px;padding:9px 11px}
 #lgRoot .lg-msg.bad{background:var(--bad-soft);color:var(--bad)}

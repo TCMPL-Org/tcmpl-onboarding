@@ -341,3 +341,100 @@ img{max-width:100%}body{margin:0}
 .jl-tr{margin:4px 0;line-height:1.45}
 .jl-tr b{display:inline-block;min-width:84px;color:var(--muted)}
 .jl-tr.cand b{color:var(--teal-ink,#0f766e)}
+
+/* ===== Client Hub look (src/shell.js adds body.tc-shell): left sidebar, top bar, profile menu ===== */
+body.tc-shell{
+  --hub:#1E4FA0; --hub-ink:#173E80; --hub-soft:#E6EEF9; --hub-bg:#EEF2F7;
+  --bg:var(--hub-bg); --line:#DCE3EC; --ink:#13284A; --muted:#5B6B82; --surface-2:#F5F7FB;
+  --blue:var(--hub); --blue-soft:var(--hub-soft); --teal:#2A6FC9; --teal-ink:var(--hub); --teal-soft:#E6EEF9;
+  --display:'IBM Plex Sans','Source Sans 3','Segoe UI',sans-serif; --body:'IBM Plex Sans','Source Sans 3','Segoe UI',system-ui,sans-serif;
+  --r:14px; padding-left:256px}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) body.tc-shell{--hub:#7AA5EA;--hub-ink:#9BBCF0;--hub-soft:#1A2D45;--hub-bg:#0D1922;--line:#24394A;--ink:#E4EDF2;--muted:#94A7B6;--surface-2:#182A37;--teal:#7AA5EA;--teal-soft:#1A2D45}}
+:root[data-theme="dark"] body.tc-shell{--hub:#7AA5EA;--hub-ink:#9BBCF0;--hub-soft:#1A2D45;--hub-bg:#0D1922;--line:#24394A;--ink:#E4EDF2;--muted:#94A7B6;--surface-2:#182A37;--teal:#7AA5EA;--teal-soft:#1A2D45}
+body.tc-shell .card{border-radius:var(--r);box-shadow:0 1px 2px rgba(19,40,74,.04)}
+body.tc-shell .btn{border-radius:10px}
+body.tc-shell .btn.primary,body.tc-shell .btn.teal{background:var(--hub);border-color:var(--hub)}
+body.tc-shell .seg button[aria-pressed=true]{background:var(--hub)}
+body.tc-shell h1,body.tc-shell h2,body.tc-shell h3{letter-spacing:0}
+body.tc-shell .intro h2{font-size:1.6rem}
+
+/* sidebar */
+.tc-side{position:fixed;inset:0 auto 0 0;width:256px;background:var(--surface);border-right:1px solid var(--line);display:flex;flex-direction:column;z-index:20;overflow-y:auto;padding:0 14px 14px}
+.tc-side-logo{padding:20px 10px 18px;border-bottom:1px solid var(--line);margin:0 -14px 14px;padding-left:24px}
+.tc-side-logo .logo{background:none;padding:0}
+.tc-side-logo .logo img{height:46px}
+.tc-side-mod{margin:0 0 14px}
+.tc-side-mod .md-switch{display:flex;width:100%;margin:0;border-radius:12px;padding:3px;background:var(--surface-2)}
+.tc-side-mod .md-switch button{flex:1;border-radius:9px;padding:8px 10px}
+.tc-side-mod .md-switch button[aria-pressed=true]{background:var(--hub);color:#fff}
+.tc-side-h{font-size:.95rem;font-weight:600;color:var(--muted);padding:6px 10px 8px}
+.tc-side nav.tabs,.tc-exit-nav{display:flex;flex-direction:column;gap:4px;padding:0;overflow:visible;max-width:none;margin:0}
+.tc-side nav.tabs button,.tc-exit-nav button{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:0;border-left:3px solid transparent;border-radius:12px;padding:11px 12px;font-size:1rem;font-weight:500;color:var(--ink);background:none;white-space:normal}
+.tc-side nav.tabs button:hover,.tc-exit-nav button:hover{background:var(--surface-2)}
+.tc-side nav.tabs button[aria-selected=true],.tc-exit-nav button[aria-selected=true]{background:var(--hub-soft);color:var(--hub-ink);font-weight:600;border-left-color:var(--hub);border-bottom-color:transparent}
+.tc-side .tc-ico{flex:none;color:currentColor}
+.tc-exit-nav{display:none}
+body.md-exit .tc-side nav.tabs{display:none!important}
+body.md-exit .tc-exit-nav{display:flex}
+body.md-exit #exitApp .ex-tabs{display:none}
+body.md-onb-off:not(.md-exit) .tc-side nav.tabs{display:none!important}
+.tc-side-foot{margin-top:auto;padding:16px 10px 2px;font-size:.78rem;color:var(--muted)}
+
+/* top bar */
+body.tc-shell header.top{background:var(--surface);border-bottom:1px solid var(--line);box-shadow:none}
+body.tc-shell header.top .topbar{gap:12px;padding-block:12px;min-height:72px;flex-wrap:nowrap;max-width:none}
+body.tc-shell header.top .topbar>#fxNote{position:absolute;left:24px;bottom:2px;font-size:.75rem}
+body.tc-shell header.top{position:sticky;top:0}
+body.tc-shell header.top .brandtxt{display:none}
+.tc-crumb{display:flex;align-items:center;gap:6px;font-size:1.05rem;color:var(--muted);min-width:0}
+.tc-crumb span{color:var(--hub);text-decoration:underline;text-underline-offset:3px}
+.tc-crumb b{color:var(--ink);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.tc-shell header.top .topright{gap:8px;flex-wrap:wrap;justify-content:flex-end;min-width:0;flex:1}
+.tc-crumb{flex:none}
+/* the small CURRENCY / CLIENT captions stay for screen readers only, so the bar fits on one row */
+body.tc-shell header.top .topright label.lbl{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+body.tc-shell header.top .topright .tools{display:inline-flex;gap:2px;border:1px solid var(--line);border-radius:10px;padding:2px}
+body.tc-shell header.top .topright .tools button{border:0;padding:4px 8px;background:none}
+body.tc-shell header.top .topright #clientSel{max-width:260px}
+body.tc-shell header.top .pill-demo{white-space:nowrap}
+@media (max-width:1440px){body.tc-shell .tc-prof .tc-who{display:none}}
+@media (max-width:1600px){body.tc-shell header.top .pill-demo{display:none}body.tc-shell header.top .topright #clientSel{max-width:220px}.tc-prof{max-width:230px}}
+.tc-crumb span{cursor:pointer}
+body.tc-shell #adMe{display:none!important}
+body.tc-shell header .tools button{border-radius:10px}
+body.tc-shell #clientSel,body.tc-shell #curSel{border-radius:10px}
+.tc-ham{display:none;border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:7px;color:var(--ink)}
+
+/* profile */
+.tc-prof-wrap{position:relative;margin-left:6px;flex:none}
+.tc-prof{display:flex;align-items:center;gap:10px;border:1px solid var(--line);background:var(--surface);border-radius:14px;padding:6px 10px 6px 6px;color:var(--ink);max-width:340px}
+.tc-prof:hover{border-color:var(--hub)}
+.tc-av{flex:none;width:36px;height:36px;border-radius:50%;background:var(--hub);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:.9rem}
+.tc-av.big{width:44px;height:44px;font-size:1rem}
+.tc-who{display:flex;flex-direction:column;text-align:left;min-width:0;line-height:1.2}
+.tc-who b{font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tc-who small{font-size:.8rem;color:var(--muted)}
+.tc-menu{position:absolute;right:0;top:calc(100% + 8px);width:300px;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 40px rgba(19,40,74,.16);padding:8px;z-index:60}
+.tc-menu-h{display:flex;gap:12px;align-items:center;padding:10px 10px 12px;border-bottom:1px solid var(--line);margin-bottom:6px}
+.tc-menu-h div{display:flex;flex-direction:column;min-width:0}
+.tc-menu-h b{font-size:.95rem;overflow:hidden;text-overflow:ellipsis}
+.tc-menu-h small{font-size:.8rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis}
+.tc-menu button{display:flex;align-items:center;gap:10px;width:100%;border:0;background:none;border-radius:10px;padding:10px;text-align:left;font-weight:500;color:var(--ink)}
+.tc-menu button:hover{background:var(--hub-soft);color:var(--hub-ink)}
+.tc-menu button[data-act=out]{color:var(--bad)}
+
+/* small screens: the sidebar slides in from the menu button */
+@media (max-width:980px){
+  body.tc-shell{padding-left:0}
+  .tc-side{transform:translateX(-100%);transition:transform .2s ease;box-shadow:0 0 40px rgba(0,0,0,.2)}
+  body.tc-side-open .tc-side{transform:none}
+  .tc-ham{display:inline-flex}
+  .tc-who{display:none}
+  body.tc-shell header.top .topbar{flex-wrap:wrap;padding-block:8px}
+  body.tc-shell header.top .topright{flex-wrap:nowrap}
+  body.tc-shell header.top .topright .tools,body.tc-shell header.top #curSel,body.tc-shell header.top .pill-demo,body.tc-shell #hdrAddClient{display:none!important}
+  body.tc-shell header.top .topright #clientSel{max-width:none;flex:1;min-width:0}
+  .tc-crumb{order:3;flex-basis:100%;font-size:.95rem}
+  .tc-crumb span{display:none}
+  .tc-crumb svg{display:none}
+}
