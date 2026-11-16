@@ -13,11 +13,20 @@ async function post(path, body) {
 }
 
 const PROBLEM = {
-  too_short: 'Use at least 10 characters.',
+  too_short: 'Use at least 8 characters.',
   too_long: 'That is too long (200 characters at most).',
-  too_common: 'That password is too easy to guess. Try a short sentence or a mix of words.',
-  contains_email: 'Do not use your email name in the password.'
+  needs_letter: 'Add at least one letter.',
+  needs_number: 'Add at least one number.',
+  needs_special: 'Add at least one special character, like @ # ! or $.',
+  too_common: 'That password is too well known. Choose a different one.'
 };
+// The same rules as the server (api/src/lib/session.js), shown as a checklist while typing.
+const RULES = [
+  ['At least 8 characters', p => p.length >= 8],
+  ['A letter', p => /[A-Za-z]/.test(p)],
+  ['A number', p => /[0-9]/.test(p)],
+  ['A special character (like @ # ! $)', p => /[^A-Za-z0-9]/.test(p)]
+];
 
 function css() {
   if (document.getElementById('lgStyle')) return;
@@ -45,6 +54,10 @@ function css() {
 #lgRoot .lg-msg.bad{background:var(--bad-soft);color:var(--bad)}
 #lgRoot .lg-msg.ok{background:var(--ok-soft);color:var(--ok)}
 #lgRoot .lg-hint{font-size:.82rem;color:var(--muted);margin-top:6px}
+#lgRoot .lg-rules{list-style:none;padding:0;margin:8px 0 0;display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;font-size:.82rem;color:var(--muted)}
+#lgRoot .lg-rules li::before{content:"○";display:inline-block;width:1.2em;color:var(--muted)}
+#lgRoot .lg-rules li.ok{color:var(--ok)}
+#lgRoot .lg-rules li.ok::before{content:"✓";color:var(--ok);font-weight:700}
 #lgRoot .lg-foot{text-align:center;color:var(--muted);font-size:.78rem;margin-top:18px}`;
   document.head.append(st);
 }
@@ -143,17 +156,20 @@ async function setPasswordPage() {
     <form id="lgForm" novalidate>
       <label>Email</label><input type="text" value="${esc(email)}" readonly autocomplete="username">
       <label for="lgPw">New password</label><div class="lg-pw"><input id="lgPw" type="password" autocomplete="new-password" required><button type="button" id="lgEye">Show</button></div>
-      <p class="lg-hint">At least 10 characters. A short sentence is easy to remember and hard to guess.</p>
+      <ul class="lg-rules" id="lgRules">${RULES.map(([t], i) => `<li data-i="${i}">${esc(t)}</li>`).join('')}</ul>
       <label for="lgPw2">Type it again</label><input id="lgPw2" type="password" autocomplete="new-password" required>
       <button class="lg-btn" id="lgGo" type="submit">${purpose === 'invite' ? 'Set password and sign in' : 'Save and sign in'}</button>
       <div class="lg-msg" id="lgMsg" hidden></div>
     </form>`);
   eye('#lgEye', '#lgPw');
   $('#lgPw').focus();
+  const tick = () => { const p = $('#lgPw').value; document.querySelectorAll('#lgRules li').forEach(li => li.classList.toggle('ok', RULES[+li.dataset.i][1](p))); };
+  $('#lgPw').addEventListener('input', tick); tick();
   $('#lgForm').onsubmit = async e => {
     e.preventDefault();
     const a = $('#lgPw').value, b = $('#lgPw2').value;
-    if (a.length < 10) { say(PROBLEM.too_short); return; }
+    const miss = RULES.find(([, ok]) => !ok(a));
+    if (miss) { say('The password needs: ' + RULES.filter(([, ok]) => !ok(a)).map(([t]) => t.toLowerCase()).join(', ') + '.'); return; }
     if (a !== b) { say('The two passwords are not the same.'); return; }
     $('#lgGo').disabled = true; say('');
     const r = await post('/api/auth/set-password', { token, password: a });
@@ -162,6 +178,7 @@ async function setPasswordPage() {
     const err = r.body && r.body.error;
     if (err === 'weak_password') say(PROBLEM[r.body.problem] || 'Choose a stronger password.');
     else if (err === 'link_invalid') say('This link has expired or was already used. Ask for a new one.');
+    else if (err === 'bad_origin') say('This page must be opened from the app\'s own address. Open the link from the email again.');
     else say('Could not save the password just now (' + (r.status || 'no connection') + '). Please try again.');
   };
 }

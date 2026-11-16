@@ -36,10 +36,12 @@ test('passwords: hashing, rules, sessions', async () => {
   assert.equal(await S.verifyPassword('a long passphrase here', h), true);
   assert.equal(await S.verifyPassword('wrong one entirely', h), false);
   assert.equal(await S.verifyPassword('anything', null), false);
-  assert.equal(S.passwordProblem('short', 'a@b.com'), 'too_short');
-  assert.equal(S.passwordProblem('password123', 'a@b.com'), 'too_common');
-  assert.equal(S.passwordProblem('priyamalhotra2026', 'priyamalhotra@x.com'), 'contains_email');
-  assert.equal(S.passwordProblem('blue tea at noon', 'a@b.com'), '');
+  assert.equal(S.passwordProblem('Tc@2026'), 'too_short');
+  assert.equal(S.passwordProblem('12345678@'), 'needs_letter');
+  assert.equal(S.passwordProblem('Honey@Pawar'), 'needs_number');
+  assert.equal(S.passwordProblem('HoneyPawar1'), 'needs_special');
+  assert.equal(S.passwordProblem('Admin@123'), 'too_common');
+  assert.equal(S.passwordProblem('Honey@2026'), '', 'names are fine with a number and a special character');
   const store = getStore();
   const tok = await S.makeSession(store, { email: 'A@B.com', sessionVersion: 3 });
   const p = await S.readSession(store, tok);
@@ -79,14 +81,14 @@ test('invite → set password → sign in → reset by admin → old password an
 
   assert.equal((await auth('link-info', { token })).jsonBody.purpose, 'invite');
   assert.equal((await auth('set-password', { token, password: 'short' })).jsonBody.problem, 'too_short');
-  r = await auth('set-password', { token, password: 'monsoon on marine drive' });
+  r = await auth('set-password', { token, password: 'monsoon on marine drive 7!' });
   assert.equal(r.status, 200);
   assert.match(r.headers['Set-Cookie'], /^tc_session=.+; Path=\/api; HttpOnly; Secure; SameSite=Strict/);
   assert.equal((await auth('link-info', { token })).status, 404, 'link works once');
 
   // sign in with the password
   assert.equal((await auth('login', { email: 'priya@client.com', password: 'nope nope nope' })).status, 401);
-  r = await auth('login', { email: 'PRIYA@client.com', password: 'monsoon on marine drive' });
+  r = await auth('login', { email: 'PRIYA@client.com', password: 'monsoon on marine drive 7!' });
   assert.equal(r.status, 200);
   const cookie = withCookie(r.headers['Set-Cookie']);
   let me = await act('me', {}, cookie);
@@ -104,10 +106,10 @@ test('invite → set password → sign in → reset by admin → old password an
   assert.match(outbox.at(-1).content.subject, /was reset/);
   me = await act('me', {}, cookie);
   assert.equal(me.jsonBody.signedIn, false, 'old session ended');
-  assert.equal((await auth('login', { email: 'priya@client.com', password: 'monsoon on marine drive' })).status, 401, 'old password ended');
+  assert.equal((await auth('login', { email: 'priya@client.com', password: 'monsoon on marine drive 7!' })).status, 401, 'old password ended');
   const t2 = linkToken(outbox.at(-1));
-  assert.equal((await auth('set-password', { token: t2, password: 'chai with ginger please' })).status, 200);
-  assert.equal((await auth('login', { email: 'priya@client.com', password: 'chai with ginger please' })).status, 200);
+  assert.equal((await auth('set-password', { token: t2, password: 'chai with ginger please 9!' })).status, 200);
+  assert.equal((await auth('login', { email: 'priya@client.com', password: 'chai with ginger please 9!' })).status, 200);
 });
 
 test('forgot password: same answer for unknown emails; link works for 1 hour', async () => {
@@ -123,7 +125,7 @@ test('forgot password: same answer for unknown emails; link works for 1 hour', a
   const mins = (Date.parse(rec.reset.expires) - Date.now()) / 60000;
   assert.ok(mins > 55 && mins <= 60);
   // the current password still works until a new one is chosen
-  assert.equal((await auth('login', { email: 'priya@client.com', password: 'chai with ginger please' })).status, 200);
+  assert.equal((await auth('login', { email: 'priya@client.com', password: 'chai with ginger please 9!' })).status, 200);
 });
 
 test('five wrong passwords lock the account for 15 minutes', async () => {
@@ -131,7 +133,7 @@ test('five wrong passwords lock the account for 15 minutes', async () => {
   const r = await auth('login', { email: 'priya@client.com', password: 'wrong 5 xxxxx' });
   assert.equal(r.status, 429);
   assert.equal(r.jsonBody.error, 'locked');
-  assert.equal((await auth('login', { email: 'priya@client.com', password: 'chai with ginger please' })).status, 429, 'even the right password waits');
+  assert.equal((await auth('login', { email: 'priya@client.com', password: 'chai with ginger please 9!' })).status, 429, 'even the right password waits');
   const list = (await act('users')).jsonBody.users;
   assert.equal(list.find(u => u.email === 'priya@client.com').locked, true);
   // an admin reset clears the lock
@@ -141,15 +143,20 @@ test('five wrong passwords lock the account for 15 minutes', async () => {
 });
 
 test('switching a user off ends their session; other sites cannot post', async () => {
-  const r = await auth('login', { email: 'priya@client.com', password: 'chai with ginger please' });
+  const r = await auth('login', { email: 'priya@client.com', password: 'chai with ginger please 9!' });
   assert.equal(r.status, 200);
   const cookie = withCookie(r.headers['Set-Cookie']);
   assert.equal((await act('me', {}, cookie)).jsonBody.allowed, true);
   await act('user-save', { email: 'priya@client.com', name: 'Priya Malhotra', role: 'hr', clients: ['northpeak'], active: false });
   assert.equal((await act('me', {}, cookie)).jsonBody.signedIn, false);
-  assert.equal((await auth('login', { email: 'priya@client.com', password: 'chai with ginger please' })).status, 401);
+  assert.equal((await auth('login', { email: 'priya@client.com', password: 'chai with ginger please 9!' })).status, 401);
   const evil = { headers: { origin: 'https://evil.example', host: 'app.example.com' } };
   assert.equal((await auth('login', { email: 'x@y.com', password: 'z' }, evil)).status, 403);
+  // On Azure the API sees an internal host; the app's own address (APP_URL) is still accepted.
+  const azure = { headers: { origin: 'https://app.example.com', host: 'internal-func.azurewebsites.net' } };
+  assert.equal((await auth('login', { email: 'priya@client.com', password: 'chai with ginger please 9!' }, azure)).status, 401, 'checked normally (user is switched off), not refused as foreign');
+  const azure2 = { headers: { origin: 'https://lively-island.azurestaticapps.net', host: 'x', 'x-forwarded-host': 'lively-island.azurestaticapps.net' } };
+  assert.notEqual((await auth('forgot', { email: 'nobody@x.com' }, azure2)).status, 403);
 });
 
 test('email not set up: the admin gets the link to pass on; forgot never reveals one', async () => {

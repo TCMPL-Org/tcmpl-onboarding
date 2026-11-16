@@ -49,16 +49,17 @@ async function verifyPassword(password, stored) {
   return Boolean(stored) && want.length === got.length && crypto.timingSafeEqual(want, got);
 }
 
-// Rules a new password must meet; '' when fine.
-const COMMON = new Set(['password', 'password1', 'password123', '1234567890', '12345678901', 'qwertyuiop', 'iloveyou12', 'welcome123', 'admin12345', 'talentcarriage', 'onboarding']);
-function passwordProblem(password, email) {
+// Rules a new password must meet: at least 8 characters with a letter, a number and a special character, and not
+// one of the best-known passwords. '' when fine. (Names in the password are allowed.)
+const COMMON = new Set(['password@1', 'password@123', 'password#123', 'p@ssw0rd', 'p@ssword1', 'admin@123', 'admin@1234', 'welcome@123', 'welcome@1', 'abcd@1234', 'qwerty@123', 'test@123', 'test@1234', 'india@123', 'pass@123', 'pass@1234', 'user@123']);
+function passwordProblem(password) {
   const p = String(password || '');
-  if (p.length < 10) return 'too_short';
+  if (p.length < 8) return 'too_short';
   if (p.length > 200) return 'too_long';
+  if (!/[A-Za-z]/.test(p)) return 'needs_letter';
+  if (!/[0-9]/.test(p)) return 'needs_number';
+  if (!/[^A-Za-z0-9]/.test(p)) return 'needs_special';
   if (COMMON.has(p.toLowerCase())) return 'too_common';
-  const local = String(email || '').split('@')[0].toLowerCase();
-  if (local.length >= 4 && p.toLowerCase().includes(local)) return 'contains_email';
-  if (/^(.)\1+$/.test(p)) return 'too_common';
   return '';
 }
 
@@ -118,11 +119,19 @@ const clearCookie = () => `${COOKIE}=; Path=/api; HttpOnly; Secure; SameSite=Str
 
 // A browser on another site cannot use the cookie (SameSite=Strict); as a second check, a POST that says where it
 // comes from must come from this app.
+// On Azure the API sees an internal host name, so the app's own address (APP_URL) is accepted too, along with the
+// host names the front door passes on.
 function sameOrigin(request) {
   const origin = header(request, 'origin');
   if (!origin) return true;
-  const host = header(request, 'x-forwarded-host') || header(request, 'host');
-  try { return new URL(origin).host === host.split(',')[0].trim(); } catch { return false; }
+  let host;
+  try { host = new URL(origin).host.toLowerCase(); } catch { return false; }
+  const ok = new Set();
+  const add = v => String(v || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean).forEach(x => ok.add(x));
+  try { add(new URL(require('./links').appUrl()).host); } catch { /* no APP_URL */ }
+  add(header(request, 'x-forwarded-host')); add(header(request, 'x-original-host')); add(header(request, 'host'));
+  try { const u = header(request, 'x-ms-original-url'); if (u) add(new URL(u).host); } catch { /* not a URL */ }
+  return ok.has(host);
 }
 
 /* ---------- one-time links ---------- */

@@ -152,7 +152,7 @@ async function setPassword(body, request) {
   const f = await byToken(store, body && body.token);
   if (!f || f.user.active === false) return json(404, { error: 'link_invalid' });
   const password = String((body && body.password) || '');
-  const problem = S.passwordProblem(password, f.user.email);
+  const problem = S.passwordProblem(password);
   if (problem) return json(400, { error: 'weak_password', problem });
   const now = new Date().toISOString();
   const next = Object.assign({}, f.user, { pwHash: await S.hashPassword(password), pwSetAt: now, sessionVersion: (f.user.sessionVersion || 0) + 1, fails: 0, lockedUntil: null, lastLoginAt: now });
