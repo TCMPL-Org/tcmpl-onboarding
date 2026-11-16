@@ -57,10 +57,11 @@ function gate(r) {
   g.id = 'adGate';
   g.innerHTML = `<div class="card"><h2 style="margin:0 0 8px">No access yet</h2>
     <p>You are signed in as <b>${who}</b>, but this account is not on the user list of the TCMPL AI Onboarding Agent.</p>
-    <p class="note">Ask your admin to add <b>${who}</b> in Admin → Users. If you used the wrong Microsoft account, sign out and sign in with your work account.</p>
-    <div class="row" style="margin-top:12px"><a class="btn primary small" href="/.auth/logout?post_logout_redirect_uri=/">Sign out</a><button class="btn small" type="button" id="adRetry">Try again</button></div></div>`;
+    <p class="note">Ask your admin to invite <b>${who}</b> in Admin → Users.</p>
+    <div class="row" style="margin-top:12px"><button class="btn primary small" type="button" id="adGateOut">Sign out</button><button class="btn small" type="button" id="adRetry">Try again</button></div></div>`;
   document.body.append(g);
   $('#adRetry').onclick = () => location.reload();
+  $('#adGateOut').onclick = () => (window.tcmplSignOut ? window.tcmplSignOut() : location.assign('/.auth/logout?post_logout_redirect_uri=/'));
 }
 
 function header() {
@@ -68,9 +69,10 @@ function header() {
   if (!right || $('#adMe')) return;
   const box = document.createElement('span');
   box.id = 'adMe'; box.className = 'ad-me';
-  box.innerHTML = `<b>${esc(me.name || me.email)}</b> · ${roleLabel(me.role)}${me.role === 'admin' ? ' <button class="btn small primary" id="adOpen" type="button">Admin</button>' : ''} <a class="btn small" href="/.auth/logout?post_logout_redirect_uri=/" title="Sign out">Sign out</a>`;
+  box.innerHTML = `<b>${esc(me.name || me.email)}</b> · ${roleLabel(me.role)}${me.role === 'admin' ? ' <button class="btn small primary" id="adOpen" type="button">Admin</button>' : ''} <button class="btn small" type="button" id="adSignOut" title="Sign out">Sign out</button>`;
   right.append(box);
   if ($('#adOpen')) $('#adOpen').onclick = () => open('users');
+  $('#adSignOut').onclick = () => (window.tcmplSignOut ? window.tcmplSignOut() : location.assign('/.auth/logout?post_logout_redirect_uri=/'));
   const add = $('#hdrAddClient');
   if (add && me.role !== 'admin') add.hidden = true;
   if (me.setupMode) {
@@ -126,29 +128,67 @@ function clientNames(list) {
   return list.map(id => `<span class="ad-tag">${esc(names[id] || id)}</span>`).join('');
 }
 
+const when = t => (t ? new Date(t).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '');
+function statusOf(x) {
+  if (x.fromSettings && !x.hasPassword && !x.invitePending) return 'Admin from Azure setting (Microsoft sign-in)';
+  if (x.active === false) return '<span class="ad-tag" style="background:var(--bad-soft)">Switched off</span>';
+  if (x.locked) return '<span class="ad-tag" style="background:var(--warn-soft)">Locked (wrong passwords)</span>';
+  if (x.resetPending && !x.hasPassword) return `<span class="ad-tag" style="background:var(--warn-soft)">Password reset sent</span><br><span class="note">${esc(when(x.resetSentAt))}</span>`;
+  if (x.hasPassword) return '<span class="ad-tag" style="background:var(--ok-soft)">Active</span>' + (x.resetPending ? '<br><span class="note">Reset link sent</span>' : '');
+  if (x.invitePending) return `<span class="ad-tag" style="background:var(--blue-soft)">Invited</span><br><span class="note">sent ${esc(when(x.inviteSentAt))}</span>`;
+  if (x.inviteExpired) return '<span class="ad-tag" style="background:var(--warn-soft)">Invite expired</span>';
+  return x.lastLoginAt ? 'Active (Microsoft sign-in)' : '<span class="note">Not invited yet</span>';
+}
+const ERR2 = { already_has_password: 'This user already has a password. Use Reset password instead.', wait_a_minute: 'An email was just sent. Wait a minute before sending another.', user_switched_off: 'This user is switched off. Switch them on first.', use_forgot_password: 'To change your own password, sign out and use Forgot password.', no_such_user: 'Save the user first.' };
+
+// After an invite or reset: say what happened; when the email could not go, show the link to pass on.
+function linkResult(out, what) {
+  if (!out) return;
+  if (out.sent) { toast(`${what} emailed to ${out.to}.`); return; }
+  const box = $('#adLink');
+  if (!box) return;
+  box.hidden = false;
+  box.innerHTML = `<b>The email could not be sent</b> (${esc(out.emailError === 'email_not_configured' ? 'email is not set up in Azure' : 'email failed')}). Send this link to <b>${esc(out.to)}</b> yourself (it works once, until ${esc(when(out.expires))}):
+    <div class="row" style="margin-top:6px"><input id="adLinkText" readonly value="${esc(out.link || '')}" style="flex:1;min-width:260px"><button class="btn small" id="adCopy" type="button">Copy</button></div>`;
+  $('#adCopy').onclick = async () => { try { await navigator.clipboard.writeText($('#adLinkText').value); toast('Link copied'); } catch { $('#adLinkText').select(); } };
+}
+
 async function renderUsers(edit) {
   const r = await post('/api/access/users');
   if (!r.ok) { $('#adBody').innerHTML = `<p class="note">${esc(explain(r))}</p>`; return; }
   users = r.body.users || [];
+  const emailOn = r.body.email !== false;
   const u = edit || { email: '', name: '', role: 'hr', clients: [], active: true };
   const all = (u.clients || []).includes('*') || u.role === 'admin';
+  const meMail = String((me && me.email) || '').toLowerCase();
   $('#adBody').innerHTML = `
-    <p class="note" style="margin:0 0 8px">Only people on this list can open the app. They sign in with their Microsoft work account using this email. <b>Admin</b>: everything, including users, clients and modules. <b>HR</b>: works only on the clients ticked for them.</p>
+    <p class="note" style="margin:0 0 8px">Only people on this list can open the app. Invited people set their own password from the email link and sign in with email + password (Microsoft work accounts can also use "Sign in with Microsoft"). <b>Admin</b>: everything, including users, clients and modules. <b>HR</b>: works only on the clients ticked for them.</p>
+    ${emailOn ? '' : '<div class="callout" style="margin:0 0 8px">Email is not set up in Azure (ACS_CONNECTION_STRING, ACS_SENDER), so invitations cannot be emailed. You will get a link to send yourself.</div>'}
+    <div class="callout" id="adLink" hidden style="margin:0 0 8px"></div>
     <table><thead><tr><th>User</th><th>Role</th><th>Clients</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead><tbody>
-    ${users.map((x, i) => `<tr class="${x.active === false ? 'ad-off' : ''}"><td><b>${esc(x.email)}</b>${x.name ? '<br><span class="note">' + esc(x.name) + '</span>' : ''}</td><td>${roleLabel(x.role)}</td><td>${clientNames(x.role === 'admin' ? ['*'] : x.clients)}</td>
-      <td>${x.fromSettings ? 'Admin from Azure setting' : x.active === false ? 'Switched off' : 'Active'}</td><td>${x.lastLoginAt ? esc(new Date(x.lastLoginAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })) : '—'}</td>
-      <td>${x.fromSettings ? '' : `<button class="btn small" data-edit="${i}" type="button">Edit</button> <button class="btn small" data-del="${i}" type="button">Remove</button>`}</td></tr>`).join('') || '<tr><td colspan="6" class="note">No users yet.</td></tr>'}
+    ${users.map((x, i) => {
+      const self = String(x.email).toLowerCase() === meMail;
+      const acts = [];
+      if (!x.fromSettings) acts.push(`<button class="btn small" data-edit="${i}" type="button">Edit</button>`);
+      if (x.active !== false && !x.hasPassword) acts.push(`<button class="btn small" data-inv="${i}" type="button">${x.invitePending ? 'Resend invite' : x.fromSettings ? 'Invite (set a password)' : 'Send invite'}</button>`);
+      if (x.active !== false && x.hasPassword && !self) acts.push(`<button class="btn small" data-reset="${i}" type="button">Reset password</button>`);
+      if (!x.fromSettings) acts.push(`<button class="btn small" data-del="${i}" type="button">Remove</button>`);
+      return `<tr class="${x.active === false ? 'ad-off' : ''}"><td><b>${esc(x.email)}</b>${x.name ? '<br><span class="note">' + esc(x.name) + '</span>' : ''}</td><td>${roleLabel(x.role)}</td><td>${clientNames(x.role === 'admin' ? ['*'] : x.clients)}</td>
+      <td>${statusOf(x)}</td><td>${x.lastLoginAt ? esc(when(x.lastLoginAt)) : '—'}</td><td style="white-space:nowrap">${acts.join(' ')}</td></tr>`;
+    }).join('') || '<tr><td colspan="6" class="note">No users yet.</td></tr>'}
     </tbody></table>
-    <h3 style="margin:16px 0 0">${edit ? 'Edit user' : 'Add a user'}</h3>
+    <h3 style="margin:16px 0 0">${edit ? 'Edit user' : 'Invite a user'}</h3>
     <div class="ad-form">
-      <label>Email (their Microsoft sign-in)<input id="adEmail" type="email" value="${esc(u.email)}" ${edit ? 'readonly' : ''} placeholder="name@company.com"></label>
+      <label>Email<input id="adEmail" type="email" value="${esc(u.email)}" ${edit ? 'readonly' : ''} placeholder="name@company.com"></label>
       <label>Name<input id="adName" value="${esc(u.name || '')}" placeholder="Priya Malhotra"></label>
       <label>Role<select id="adRole"><option value="hr" ${u.role !== 'admin' ? 'selected' : ''}>HR (only their clients)</option><option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin (everything)</option></select></label>
       <label style="flex-direction:row;align-items:center;gap:6px;margin-top:18px"><input id="adActive" type="checkbox" ${u.active !== false ? 'checked' : ''}> Can sign in</label>
+      ${edit ? '' : '<label style="flex-direction:row;align-items:center;gap:6px;margin-top:18px"><input id="adInvite" type="checkbox" checked> Email an invitation now</label>'}
     </div>
     <div id="adClientsBox"><label style="display:inline-flex;gap:6px;align-items:center;font-size:13px;margin-bottom:4px"><input id="adAll" type="checkbox" ${all ? 'checked' : ''}> All clients (also new ones)</label>
       <div class="ad-clients" id="adClients">${clients().map(c => `<label><input type="checkbox" value="${esc(c.id)}" ${(u.clients || []).includes(c.id) ? 'checked' : ''}> ${esc(c.label)}${c.inactive ? ' (off)' : ''}</label>`).join('') || '<span class="note">No clients yet: add one in Clients and modules.</span>'}</div></div>
-    <div class="row" style="margin-top:10px"><button class="btn primary small" id="adSave" type="button">${edit ? 'Save changes' : 'Add user'}</button>${edit ? '<button class="btn small" id="adCancel" type="button">Cancel</button>' : ''}<span class="note" id="adState"></span></div>`;
+    <div class="row" style="margin-top:10px"><button class="btn primary small" id="adSave" type="button">${edit ? 'Save changes' : 'Invite user'}</button>${edit ? '<button class="btn small" id="adCancel" type="button">Cancel</button>' : ''}<span class="note" id="adState"></span></div>
+    <p class="note" style="margin-top:8px">Invitation links work for 7 days. <b>Reset password</b> stops the old password at once, signs the person out everywhere and emails them a link (24 hours) to choose a new one. Switching a user off also signs them out at once.</p>`;
   const sync = () => {
     const admin = $('#adRole').value === 'admin';
     if (admin) $('#adAll').checked = true;
@@ -158,6 +198,27 @@ async function renderUsers(edit) {
   };
   $('#adRole').onchange = sync; $('#adAll').onchange = sync; sync();
   $('#adBody').querySelectorAll('[data-edit]').forEach(b => { b.onclick = () => renderUsers(users[+b.dataset.edit]); });
+  $('#adBody').querySelectorAll('[data-inv]').forEach(b => {
+    b.onclick = async () => {
+      const x = users[+b.dataset.inv];
+      b.disabled = true;
+      const d = await post('/api/access/invite', { email: x.email });
+      if (!d.ok) { toast(ERR2[d.body && d.body.error] || explain(d)); b.disabled = false; return; }
+      await renderUsers();
+      linkResult(d.body, 'Invitation');
+    };
+  });
+  $('#adBody').querySelectorAll('[data-reset]').forEach(b => {
+    b.onclick = async () => {
+      const x = users[+b.dataset.reset];
+      if (!window.confirm(`Reset the password of ${x.email}?\n\nTheir current password stops working now and they are signed out everywhere. They get an email with a link to choose a new one.`)) return;
+      b.disabled = true;
+      const d = await post('/api/access/reset-password', { email: x.email });
+      if (!d.ok) { toast(ERR2[d.body && d.body.error] || explain(d)); b.disabled = false; return; }
+      await renderUsers();
+      linkResult(d.body, 'Password reset link');
+    };
+  });
   $('#adBody').querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       const x = users[+b.dataset.del];
@@ -172,10 +233,14 @@ async function renderUsers(edit) {
     const role = $('#adRole').value;
     const picked = $('#adAll').checked ? ['*'] : [...$('#adClients').querySelectorAll('input:checked')].map(i => i.value);
     if (role === 'hr' && !picked.length) { $('#adState').textContent = 'Tick at least one client, or All clients.'; return; }
-    const s = await post('/api/access/user-save', { email: $('#adEmail').value, name: $('#adName').value, role, clients: picked, active: $('#adActive').checked });
+    const invite = Boolean($('#adInvite') && $('#adInvite').checked);
+    $('#adSave').disabled = true;
+    const s = await post('/api/access/user-save', { email: $('#adEmail').value, name: $('#adName').value, role, clients: picked, active: $('#adActive').checked, invite });
+    $('#adSave').disabled = false;
     if (!s.ok) { $('#adState').textContent = explain(s); return; }
-    toast(`${s.body.user.email} saved. They can sign in at ${location.origin}`);
-    renderUsers();
+    await renderUsers();
+    if (s.body.invite && !s.body.invite.error) linkResult(s.body.invite, 'Invitation');
+    else toast(`${s.body.user.email} saved.` + (invite && s.body.invite && s.body.invite.error ? ' ' + (ERR2[s.body.invite.error] || '') : ''));
   };
 }
 

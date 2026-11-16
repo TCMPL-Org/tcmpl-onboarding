@@ -45,6 +45,14 @@ async function data({ method, col, id, body, user, candidateId }) {
       if (clientId !== '' && !access.canClient(user, clientId)) return json(403, { error: 'client_not_allowed' });
     }
     if (col === 'clients' && method !== 'GET' && user.role && user.role !== 'admin' && (method === 'DELETE' || !(await store.get(col, id)))) return json(403, { error: 'admin_only' });
+    // Salary calculator: statutory constants, minimum wages and formula columns (ctc/config) are changed by admins only;
+    // a client's salary rules (clients/<id>.ctc) too: an HR save of the client record keeps the stored rules.
+    if (col === 'ctc' && method !== 'GET' && user.role && user.role !== 'admin') return json(403, { error: 'admin_only' });
+    if (col === 'clients' && method === 'PUT' && user.role && user.role !== 'admin' && body && typeof body === 'object') {
+      const prev = await store.get(col, id);
+      body = Object.assign({}, body);
+      if (prev && prev.data && prev.data.ctc !== undefined) body.ctc = prev.data.ctc; else delete body.ctc;
+    }
     if (method === 'GET') {
       // The full bank account number stays on the server.
       const safe = r => (col === 'documents' && r && r.data && r.data.account) ? Object.assign({}, r, { data: Object.assign({}, r.data, { account: undefined }) }) : r;

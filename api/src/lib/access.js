@@ -1,15 +1,19 @@
 'use strict';
 // Who may use the app, and for which clients.
 //
-// Sign-in is done by Azure Static Web Apps (Microsoft account). That alone lets ANY Microsoft account in, so every
-// API call is also checked here against the app's own user list:
-//   users/<email id> = { email, name, role: 'admin' | 'hr', clients: ['*'] | [clientIds], active, addedBy, addedAt, lastLoginAt }
+// Two ways to sign in: Microsoft (Azure Static Web Apps, header x-ms-client-principal, which Azure removes from
+// browser requests so it cannot be faked) or email + password (signed cookie, lib/session.js). Either way every API
+// call is checked here against the app's own user list:
+//   users/<email id> = { email, name, role: 'admin' | 'hr', clients: ['*'] | [clientIds], active, addedBy, addedAt, lastLoginAt,
+//                        pwHash, pwSetAt, sessionVersion, invite: { hash, expires, sentAt, by }, reset: { hash, expires, by },
+//                        fails, lockedUntil }   (the password fields are never sent to the browser)
 //   ADMIN_EMAILS (Azure setting, comma list) are always admins for all clients, even before any user is added.
 // Admins manage users, clients and the modules (Onboarding / Exit) per client. HR users work only on their clients.
 // Until ADMIN_EMAILS is set and no user exists, the app stays open to signed-in users (setup mode, shown as a banner).
 
 const { getUser } = require('./auth');
 const { getStore } = require('./store');
+const session = require('./session');
 
 const ROLES = ['admin', 'hr'];
 const SYSTEM = { name: 'access' };
@@ -36,6 +40,22 @@ async function allUsers(store, fresh) {
   return list;
 }
 function forget() { cache = { at: 0, users: null }; }
+
+// Who sent this request: the Microsoft sign-in, or else a valid password session of an active user.
+async function identify(request) {
+  const ms = getUser(request && request.headers);
+  if (ms) return Object.assign(ms, { provider: ms.provider || 'aad' });
+  const token = session.cookieFrom(request);
+  if (!token) return null;
+  const store = getStore();
+  if (!store) return null;
+  const p = await session.readSession(store, token);
+  if (!p) return null;
+  const rec = await store.get('users', idFor(p.e)).catch(() => null);
+  const u = rec && rec.data;
+  if (!u || u.active === false || !u.pwHash || (u.sessionVersion || 0) !== p.v) return null;
+  return { id: 'pw:' + norm(u.email), name: norm(u.email), provider: 'password', roles: ['authenticated'] };
+}
 
 // The signed-in person with their role and clients, or why they may not come in.
 async function resolve(principal) {
@@ -66,7 +86,7 @@ function canClient(u, clientId) {
 // Used by every API function: { user } when allowed, otherwise { response } to return as is.
 // body.client / body.candidateId are checked against the user's clients.
 async function guard(request, body) {
-  const r = await resolve(getUser(request.headers));
+  const r = await resolve(await identify(request));
   if (!r.user) return { response: { status: r.status, jsonBody: { error: r.error, email: r.email || '' } } };
   const u = r.user;
   if (body && typeof body === 'object' && !allClients(u)) {
@@ -105,13 +125,28 @@ function cleanUser(p, by) {
   return { user: { email, name: String(p.name || '').slice(0, 120), role, clients, active: p.active !== false, updatedBy: by } };
 }
 
+// A user as admins see it: never the password hash or link tokens.
+function publicUser(u) {
+  const now = Date.now();
+  const out = { email: u.email, name: u.name || '', role: u.role, clients: u.clients, active: u.active !== false, addedBy: u.addedBy, addedAt: u.addedAt, lastLoginAt: u.lastLoginAt || null, fromSettings: Boolean(u.fromSettings) };
+  out.hasPassword = Boolean(u.pwHash);
+  out.pwSetAt = u.pwSetAt || null;
+  out.invitePending = Boolean(u.invite && u.invite.hash && Date.parse(u.invite.expires) > now);
+  out.inviteSentAt = (u.invite && u.invite.sentAt) || null;
+  out.inviteExpired = Boolean(u.invite && u.invite.hash && !(Date.parse(u.invite.expires) > now));
+  out.resetPending = Boolean(u.reset && u.reset.hash && Date.parse(u.reset.expires) > now);
+  out.resetSentAt = (u.reset && u.reset.sentAt) || null;
+  out.locked = Boolean(u.lockedUntil && Date.parse(u.lockedUntil) > now);
+  return out;
+}
+
 async function httpAction({ action, body, request }) {
-  const principal = getUser(request.headers);
+  const principal = await identify(request);
   const r = await resolve(principal);
   if (action === 'me') {
-    if (!r.user) return { status: 200, jsonBody: { allowed: false, reason: r.error, email: r.email || emailOf(principal) || (principal && principal.name) || '' } };
+    if (!r.user) return { status: 200, jsonBody: { allowed: false, signedIn: Boolean(principal), reason: r.error, email: r.email || emailOf(principal) || (principal && principal.name) || '', provider: principal ? principal.provider : '' } };
     const u = r.user;
-    return { status: 200, jsonBody: { allowed: true, email: u.email || u.name, name: u.displayName || '', role: u.role, clients: u.clients, setupMode: Boolean(u.setupMode), adminsSet: admins().length > 0 } };
+    return { status: 200, jsonBody: { allowed: true, signedIn: true, email: u.email || u.name, name: u.displayName || '', role: u.role, clients: u.clients, provider: principal.provider || 'aad', setupMode: Boolean(u.setupMode), adminsSet: admins().length > 0 } };
   }
   if (!r.user) return { status: r.status, jsonBody: { error: r.error } };
   if (r.user.role !== 'admin') return { status: 403, jsonBody: { error: 'admin_only' } };
@@ -124,7 +159,7 @@ async function httpAction({ action, body, request }) {
     const list = (await allUsers(store, true)).map(u => Object.assign({}, u));
     for (const e of admins()) if (!list.some(u => norm(u.email) === e)) list.unshift({ email: e, name: '', role: 'admin', clients: ['*'], active: true, fromSettings: true });
     list.forEach(u => { if (admins().includes(norm(u.email))) u.fromSettings = true; });
-    return { status: 200, jsonBody: { users: list } };
+    return { status: 200, jsonBody: { users: list.map(publicUser), email: require('./email').emailConfigured() } };
   }
   if (action === 'user-save') {
     const c = cleanUser(p, by);
@@ -132,9 +167,32 @@ async function httpAction({ action, body, request }) {
     if (c.user.email === norm(by) && (c.user.role !== 'admin' || !c.user.active) && !admins().includes(c.user.email)) return { status: 400, jsonBody: { error: 'cannot_remove_own_admin' } };
     const prev = await store.get('users', idFor(c.user.email));
     const data = Object.assign({ addedBy: by, addedAt: new Date().toISOString() }, prev && prev.data, c.user);
+    // Switching a user off ends their open sessions straight away.
+    if (prev && prev.data && prev.data.active !== false && data.active === false) data.sessionVersion = (data.sessionVersion || 0) + 1;
     await store.put('users', idFor(c.user.email), data, { name: by });
     forget();
-    return { status: 200, jsonBody: { user: data } };
+    let invite = null;
+    let shown = data;
+    if (p.invite && data.active !== false && !data.pwHash) {
+      invite = await require('./passwords').sendLink(store, data.email, 'invite', r.user, request);
+      shown = ((await store.get('users', idFor(c.user.email))) || {}).data || data;
+    }
+    return { status: 200, jsonBody: { user: publicUser(shown), invite } };
+  }
+  if (action === 'invite' || action === 'reset-password') {
+    const email = norm(p.email);
+    let rec = isEmail(email) ? await store.get('users', idFor(email)) : null;
+    // An admin from the ADMIN_EMAILS setting has no record yet: make one so they can also use a password.
+    if ((!rec || !rec.data) && admins().includes(email)) {
+      await store.put('users', idFor(email), { email, name: '', role: 'admin', clients: ['*'], active: true, addedBy: by, addedAt: new Date().toISOString() }, { name: by });
+      forget();
+      rec = await store.get('users', idFor(email));
+    }
+    if (!rec || !rec.data || !rec.data.email) return { status: 404, jsonBody: { error: 'no_such_user' } };
+    if (rec.data.active === false) return { status: 400, jsonBody: { error: 'user_switched_off' } };
+    if (action === 'reset-password' && email === norm(by)) return { status: 400, jsonBody: { error: 'use_forgot_password' } };
+    const out = await require('./passwords').sendLink(store, email, action === 'invite' ? 'invite' : 'admin-reset', r.user, request);
+    return { status: out.error ? 400 : 200, jsonBody: out };
   }
   if (action === 'user-remove') {
     const email = norm(p.email);
@@ -147,4 +205,4 @@ async function httpAction({ action, body, request }) {
   return { status: 404, jsonBody: { error: 'unknown_action' } };
 }
 
-module.exports = { resolve, guard, canClient, allClients, filterItems, httpAction, idFor, forget, ROLES };
+module.exports = { identify, resolve, guard, canClient, allClients, filterItems, httpAction, idFor, forget, allUsers, publicUser, norm, isEmail, admins, ROLES };
