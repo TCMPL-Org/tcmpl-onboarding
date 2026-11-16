@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import random
+import re
 import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -60,6 +61,33 @@ def azure_endpoint() -> str:
     return f"{u.scheme}://{u.netloc}" if u.scheme and u.netloc else raw.rstrip("/")
 
 
+REASONING_NAMES = {"gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5"}
+
+
+def llm_options() -> dict:
+    """Azure OpenAI settings for calls. "Thinking" models (GPT-5, o-series) are told to think as little as
+    possible: on a phone call every second of thinking is a second of silence."""
+    deployment = os.getenv("VOICE_LLM_DEPLOYMENT", "").strip() or os.environ["AZURE_OPENAI_DEPLOYMENT"].strip()
+    name = (os.getenv("VOICE_LLM_MODEL", "").strip() or deployment).lower()
+    opts = dict(
+        azure_endpoint=azure_endpoint(),
+        azure_deployment=deployment,
+        api_key=os.environ["AZURE_OPENAI_API_KEY"].strip(),
+        api_version=os.getenv("AZURE_OPENAI_API_VERSION", "").strip() or "2024-10-21",
+    )
+    if "chat" in name:
+        pass  # "-chat" models don't think and don't accept the setting
+    elif name in REASONING_NAMES:
+        opts["model"] = name  # the plugin then picks the lowest reasoning effort for that model
+    elif re.match(r"^gpt-5\.\d", name):
+        opts["reasoning_effort"] = "none"
+    elif name.startswith("gpt-5"):
+        opts["reasoning_effort"] = "minimal"
+    elif re.match(r"^o\d", name):
+        opts["reasoning_effort"] = "low"
+    return opts
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -69,7 +97,7 @@ FILLERS = {
     "en-IN": ["Okay…", "Sure…", "Alright…", "Got it…", "Right…"],
     "hi-IN": ["जी…", "अच्छा…", "ठीक है…", "Okay जी…", "हाँ जी…"],
 }
-FILLER_AFTER = 0.7  # seconds of silence after the candidate stops before a filler is said
+FILLER_AFTER = 0.45  # seconds after the candidate's turn ends before a filler is said (skipped if the reply is ready)
 
 
 class CallState:
@@ -180,7 +208,7 @@ async def post_result(state: CallState, session: AgentSession | None) -> None:
 
 
 def prewarm(proc: JobProcess) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
+    proc.userdata["vad"] = silero.VAD.load(min_silence_duration=0.3)
 
 
 server = AgentServer(setup_fnc=prewarm)
@@ -209,24 +237,14 @@ async def outbound_call(ctx: JobContext) -> None:
     tts = sarvam.TTS(target_language_code=state.language, model="bulbul:v3",
                      speaker=meta.get("voice") or os.getenv("VOICE_SPEAKER", "priya"), pace=1.05,
                      min_buffer_size=30)
-    model = os.getenv("VOICE_LLM_MODEL", "").strip()
-    llm_opts = dict(
-        azure_endpoint=azure_endpoint(),
-        azure_deployment=(os.getenv("VOICE_LLM_DEPLOYMENT", "").strip() or os.environ["AZURE_OPENAI_DEPLOYMENT"].strip()),
-        api_key=os.environ["AZURE_OPENAI_API_KEY"].strip(),
-        api_version=os.getenv("AZURE_OPENAI_API_VERSION", "").strip() or "2024-10-21",
-        max_completion_tokens=120,  # phone replies are one or two short sentences
-    )
-    if model:
-        llm_opts["model"] = model  # lets the plugin ask reasoning models (gpt-5…) to think minimally
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         stt=sarvam.STTRealtime(language="auto" if meta.get("language") in (None, "", "auto") else state.language,
                                mode="codemix", stream_type="fast"),
-        llm=openai.LLM.with_azure(**llm_opts),
+        llm=openai.LLM.with_azure(**llm_options()),
         tts=tts,
         turn_handling={
-            "endpointing": {"min_delay": 0.35, "max_delay": 1.8},
+            "endpointing": {"min_delay": 0.3, "max_delay": 1.5},
             "preemptive_generation": {"enabled": True, "preemptive_tts": True},
         },
     )
