@@ -238,7 +238,7 @@ async function render(store, p, user) {
     const s = sid ? await store.get('signatories', sid) : null;
     if (!s || !canSee(user, s.data.client) || (s.data.client !== '*' && d.client !== '*' && s.data.client !== d.client && s.data.client !== p.client)) return res(409, { error: 'signatory_required', detail: 'Choose who signs this letter.' });
     const img = s.data.hasImage ? await getFile(store, `sig/${sid}`) : null;
-    if (!img) return res(409, { error: 'signature_missing', detail: `No signature image for ${s.data.name}. An admin can add it in Client setup.` });
+    if (!img) return res(409, { error: 'signature_missing', detail: `No signature image for ${s.data.name}. An admin can add it in Offer letters.` });
     images[k] = { data: img };
     signer = { id: sid, name: s.data.name };
   }

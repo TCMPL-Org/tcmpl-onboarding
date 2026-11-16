@@ -1,5 +1,5 @@
 // Word offer letters: the client's own .docx template (HROne-style «MERGEFIELDS»), filled by the server.
-//  - Client setup → "Word offer letters": admins upload a template, choose where each placeholder comes from,
+//  - Offer letters (own section): admins upload a template, choose where each placeholder comes from,
 //    which salary components go into each salary table, pictures (logo, signature) and signatories.
 //  - Offer desk: a Word template appears first in "Offer letter template"; its preview is the real Word layout,
 //    HR fills the per-offer details, and "Approve and hand to agent" makes the signed letter (PDF through
@@ -99,6 +99,8 @@ function inWords(n) {
   if (rest) parts.push(three(rest));
   return parts.join(' ') + ' Only';
 }
+
+window.tcmplInWords = inWords;
 
 let tpls = [], sigs = [], status = { graph: false, storage: false, admin: false }, loaded = false;
 const asks = {}; // template id -> { FIELD: value } typed on the Offer desk
@@ -333,7 +335,7 @@ function panel(t) {
   if (!sigPick[t.id] || !ss.some(s => s.id === sigPick[t.id])) sigPick[t.id] = (ss.find(s => s.data.hasImage) || ss[0] || {}).id || '';
   const a = asks[t.id] = asks[t.id] || {};
   const focus = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.dxask : null;
-  p.innerHTML = `${usesSignature(t) ? `<div class="field"><label class="lbl" for="dxSig">Signed by</label><select id="dxSig">${ss.length ? ss.map(s => `<option value="${esc(s.id)}" ${s.id === sigPick[t.id] ? 'selected' : ''}>${esc(s.data.name)}${s.data.designation ? ', ' + esc(s.data.designation) : ''}${s.data.hasImage ? '' : ' (no signature image)'}</option>`).join('') : '<option value="">No signatory set up (Client setup → Word offer letters)</option>'}</select></div>` : ''}
+  p.innerHTML = `${usesSignature(t) ? `<div class="field"><label class="lbl" for="dxSig">Signed by</label><select id="dxSig">${ss.length ? ss.map(s => `<option value="${esc(s.id)}" ${s.id === sigPick[t.id] ? 'selected' : ''}>${esc(s.data.name)}${s.data.designation ? ', ' + esc(s.data.designation) : ''}${s.data.hasImage ? '' : ' (no signature image)'}</option>`).join('') : '<option value="">No signatory set up (Offer letters)</option>'}</select></div>` : ''}
     ${askF.length ? `<div class="dx-asks">${askF.map(f => `<div class="field"><label class="lbl" for="dxa_${esc(f.name)}">${esc((m[f.name] && m[f.name].label) || pretty(f.name))}</label><input type="text" id="dxa_${esc(f.name)}" data-dxask="${esc(f.name)}" value="${esc(a[f.name] || '')}"></div>`).join('')}</div>` : ''}
     <div class="note" id="dxState"></div>`;
   const sel = $('#dxSig'); if (sel) sel.onchange = () => { sigPick[t.id] = sel.value; schedule(); };
@@ -365,7 +367,7 @@ async function preview() {
   if (seq !== renderSeq) return;
   if (!r.ok) { if (state) state.textContent = r.body.detail || 'The letter preview could not be made.'; lastKey = ''; return; }
   const miss = r.body.missing || [];
-  if (state) state.innerHTML = (miss.length ? `<span class="chip warn">${miss.length} still empty</span> ${esc(miss.map(pretty).join(', '))} · highlighted in yellow. Fill them in (Client setup → Word offer letters, or the boxes above) before approving.`
+  if (state) state.innerHTML = (miss.length ? `<span class="chip warn">${miss.length} still empty</span> ${esc(miss.map(pretty).join(', '))} · highlighted in yellow. Fill them in (Offer letters, or the boxes above) before approving.`
     : '<span class="chip ok">Ready to approve</span> Every placeholder is filled.') + (status.graph ? '' : ' <span class="note">Until Microsoft 365 is connected the candidate gets a Word file.</span>');
   const lp = $('#letterPrev');
   try {
