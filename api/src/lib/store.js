@@ -15,7 +15,9 @@ const crypto = require('node:crypto');
 
 const COLLECTIONS = new Set(['structures', 'templates', 'plans', 'offers', 'clients', 'master', 'employees', 'fx', 'candidates', 'messages', 'letters', 'documents', 'content', 'facts', 'journeys',
   // Module switches per client, and the Exit module's own collections (written only through /api/exit/...)
-  'modules', 'users', 'calls', 'ctc', 'exit_cases', 'exit_messages', 'exit_approvals', 'exit_clearances', 'exit_settlements', 'exit_interviews', 'exit_alumni', 'exit_setup', 'exit_documents']);
+  'modules', 'users', 'calls', 'ctc',
+  // Named candidate journeys; Word letter templates, signatories, their files and the approval log (written through /api/letters)
+  'flows', 'lettertpl', 'signatories', 'letterfiles', 'letterlog', 'exit_cases', 'exit_messages', 'exit_approvals', 'exit_clearances', 'exit_settlements', 'exit_interviews', 'exit_alumni', 'exit_setup', 'exit_documents']);
 const ID_RE = /^[A-Za-z0-9_.:-]{1,200}$/;
 
 function tenant() { return process.env.TENANT_ID || 'tcmpl'; }

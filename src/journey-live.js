@@ -129,7 +129,7 @@ function mount() {
   intro.after(wrap);
   $('#jlCand').onchange = () => { selected = $('#jlCand').value; sel = null; preview = null; lastSig = ''; docs = []; docEdit = null; missingQ = null; callsList = []; renderAll(); loadMsgs(true); loadDocs(); loadCalls(); };
   $('#jlRefresh').onclick = () => reload(selected);
-  $('#jlCall').onclick = callNow;
+  $('#jlCall').onclick = () => callNow();
   $('#jlNext').onclick = () => { const n = nextStep(); if (n) selectStep(n.id, true); };
   $('#jlDemo').onchange = () => setDemo($('#jlDemo').checked);
   $('#jlDemo2').onchange = () => setDemo($('#jlDemo2').checked);
@@ -323,7 +323,7 @@ function buildSteps(c) {
     if (ckOn && REPLACED.has(tp.key)) continue; // replaced by the client's journey check-ins
     const phase = PHASE_OF[tp.key] || (tp.date < doj ? 'pre' : 'p90');
     const kind = tp.key === 'docs' ? 'docs' : tp.key === 'confirm' ? 'forms' : tp.track !== 'c' ? 'owner' : 'tp';
-    out.push({ id: 'tp:' + tp.key, key: tp.key, kind, phase, date: tp.date, rel: tp.rel, label: tp.label, track: tp.track, sentAt: sent[tp.key] && sent[tp.key].at });
+    out.push({ id: 'tp:' + tp.key, key: tp.key, kind, phase, date: tp.date, rel: tp.rel, label: tp.label, track: tp.track, ch: tp.ch || 'wa', sentAt: sent[tp.key] && sent[tp.key].at });
   }
   for (const q of CHECKS) {
     if (!readyTpl.some(t => t.k === q.k)) continue;
@@ -562,13 +562,15 @@ function renderMsgStep(box, c, s, when) {
       <label class="note" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="jlPrevEmail" ${health.email && candEmail(c) ? 'checked' : 'disabled'}> Email to ${esc(candEmail(c) || 'candidate (no email on the offer)')}${health.email ? ' · same text and attachments, with the client\'s CC (Client setup → Email settings)' : ' (email not set up yet)'}</label>` : ''}`;
   box.innerHTML = panel({
     title: s.label, status: s.status, when,
-    who: owner ? (s.track === 'm' ? 'For the manager, not the candidate' : 'For IT, Admin and Security, not the candidate') : 'To the candidate on WhatsApp',
+    who: owner ? (s.track === 'm' ? 'For the manager, not the candidate' : 'For IT, Admin and Security, not the candidate') : s.ch === 'call' ? 'To the candidate by AI call (WhatsApp text below if needed)' : s.ch === 'wa_call' ? 'To the candidate on WhatsApp, then a call if no reply' : 'To the candidate on WhatsApp',
     what,
     actions: owner ? '<span class="note">Sending to owners and tracking their replies comes with Day-1 readiness (being built next). For now, copy this message to them.</span><button class="btn small" id="jlCopy" type="button">Copy message</button>'
-      : `<button class="btn primary" id="jlPrevSend" type="button">${s.sentAt ? 'Send again' : 'Send on WhatsApp'}</button>`,
+      : (stepCall(s) && s.ch === 'call' ? `<button class="btn primary" id="jlStepCall" type="button">📞 Call now (AI)</button><button class="btn small" id="jlPrevSend" type="button">${s.sentAt ? 'Send on WhatsApp again' : 'Send on WhatsApp instead'}</button><span class="note">This journey reaches the candidate by call at this step.</span>`
+        : `<button class="btn primary" id="jlPrevSend" type="button">${s.sentAt ? 'Send again' : 'Send on WhatsApp'}</button>${stepCall(s) ? '<button class="btn small" id="jlStepCall" type="button">📞 Call if no reply</button>' : ''}`),
     result: s.sentAt ? `<p>Sent ${esc(fmtTime(s.sentAt))}. The candidate's reply appears in the chat.</p>` : ''
   });
   if ($('#jlPrevSend')) $('#jlPrevSend').onclick = () => sendPreview(s);
+  if ($('#jlStepCall')) $('#jlStepCall').onclick = () => callNow(stepCall(s));
   if ($('#jlCopy')) $('#jlCopy').onclick = async () => { try { await navigator.clipboard.writeText($('#jlPrevText').value); U().toast('Message copied.'); } catch { U().toast('Select the text and copy it.'); } };
 }
 
@@ -924,18 +926,26 @@ function renderCalls() {
 
 /* ---------- actions ---------- */
 // The AI voice assistant calls the candidate (LiveKit + Plivo); the outcome and transcript appear in the chat.
-async function callNow() {
+// The call that fits a journey step set to "AI call" (Client setup → Candidate journey).
+const STEP_CALL = { offer: 'confirm', confirm: 'confirm', resign: 'confirm', call: 'eve', day1kit: 'eve', final90: 'close' };
+function stepCall(s) {
+  if (!s || !s.ch || s.ch === 'wa') return null;
+  if (s.ch === 'wa_call' && !STEP_CALL[s.key]) return { purpose: 'noreply', note: '' };
+  return STEP_CALL[s.key] ? { purpose: STEP_CALL[s.key], note: '' } : { purpose: 'general', note: `This call is the journey step "${s.label}". Talk to the candidate about it, answer what you can and note anything HR should follow up.` };
+}
+async function callNow(preset) {
   const c = current(); if (!c) return;
   const u = U();
-  const purpose = $('#jlCallPurpose').value;
-  let note = '';
-  if (purpose === 'general') { note = window.prompt(`What should the assistant ask or tell ${c.first || c.name}?`, ''); if (note === null) return; }
+  const purpose = preset ? preset.purpose : $('#jlCallPurpose').value;
+  let note = preset ? preset.note || '' : '';
+  if (purpose === 'general' && !note) { note = window.prompt(`What should the assistant ask or tell ${c.first || c.name}?`, ''); if (note === null) return; }
   if (!window.confirm(`Call ${c.name} now on +${c.phone}?\n\nThe AI voice assistant introduces itself, speaks in English or Hindi, and saves the answers and transcript here.`)) return;
   const go = async force => u.getJson('/api/calls/start', { method: 'POST', body: JSON.stringify({ candidateId: c.id, purpose, note, force }) }).catch(() => ({ ok: false }));
-  $('#jlCall').disabled = true;
+  const btns = [$('#jlCall'), $('#jlStepCall')].filter(Boolean);
+  btns.forEach(b => { b.disabled = true; });
   let r = await go(false);
   if (!r.ok && r.body && r.body.error === 'outside_hours' && window.confirm(`${r.body.detail}\nCall anyway?`)) r = await go(true);
-  $('#jlCall').disabled = false;
+  btns.forEach(b => { b.disabled = false; });
   if (r.ok) { u.toast(`Calling ${c.name}… The outcome and transcript show under Calls when the call ends.`); await reload(selected); }
   else if (r.body && r.body.error === 'call_in_progress') u.toast('A call to this candidate is still in progress.');
   else if (r.body && r.body.error === 'calls_not_configured') u.toast('Calling is not set up yet (LiveKit settings in Azure).');

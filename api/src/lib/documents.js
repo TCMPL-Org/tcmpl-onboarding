@@ -37,9 +37,15 @@ function consentText(cand) {
     'Your Aadhaar is saved with the first 8 digits hidden, in a private store in India. You can ask us to delete your documents at any time.\n\nTap *I agree* to continue.';
 }
 
+// The candidate's journey can ask for only some of the documents (Client setup → Candidate journey → Documents step).
+function wanted(d) {
+  const w = d && Array.isArray(d.want) ? ORDER.filter(t => d.want.includes(t)) : [];
+  return w.length ? w : ORDER;
+}
+
 function nextMissing(d) {
   const items = d.items || {};
-  return ORDER.find(t => !items[t] || !DONE.includes(items[t].status)) || null;
+  return wanted(d).find(t => !items[t] || !DONE.includes(items[t].status)) || null;
 }
 
 function askNext(cand) {
@@ -173,6 +179,7 @@ function applyKyc(cand, type, f) {
 // Returns { handled, replies } — when handled, the agent does not answer this message.
 async function onInbound(store, candidateId, cand, m) {
   const d = cand.docs = Object.assign({ items: {} }, cand.docs);
+  if (!d.want && cand.profile && Array.isArray(cand.profile.docsWant)) d.want = cand.profile.docsWant.filter(t => ORDER.includes(t));
   const text = String(m.text || '').trim();
 
   if (m.media && m.media.id) {
@@ -252,6 +259,7 @@ async function request(store, candidateId, user) {
   if (!rec) return { status: 404, body: { error: 'candidate_not_found' } };
   const cand = Object.assign({}, rec.data);
   const d = cand.docs = Object.assign({ items: {} }, cand.docs);
+  if (!d.want && cand.profile && Array.isArray(cand.profile.docsWant)) d.want = cand.profile.docsWant.filter(t => ORDER.includes(t));
   d.requestedAt = nowIso(); d.requestedBy = user.name; d.declinedAt = null;
   const replies = d.consentAt ? askNext(cand) : [{ text: consentText(cand), buttons: ['I agree', 'Not now'] }];
   try { await sendReplies(cand.phone, replies); }

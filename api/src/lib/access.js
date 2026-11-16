@@ -107,6 +107,7 @@ async function filterItems(u, col, items) {
   const store = getStore();
   const clientOf = d => (d && (d.client || (d.profile && d.profile.client))) || '';
   if (['clients', 'journeys', 'modules', 'facts', 'plans'].includes(col)) return items.filter(r => canClient(u, (r.data && r.data.client) || r.id));
+  if (col === 'lettertpl' || col === 'signatories') return items.filter(r => (r.data && r.data.client) === '*' || canClient(u, r.data && r.data.client));
   if (col === 'candidates' || col.startsWith('exit_')) return items.filter(r => canClient(u, clientOf(r.data)));
   if (col === 'messages' || col === 'documents' || col === 'calls') {
     const ok = new Set((await store.list('candidates')).filter(r => canClient(u, clientOf(r.data))).map(r => r.id));

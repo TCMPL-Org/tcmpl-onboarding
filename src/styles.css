@@ -438,3 +438,55 @@ body.tc-shell #clientSel,body.tc-shell #curSel{border-radius:10px}
   .tc-crumb span{display:none}
   .tc-crumb svg{display:none}
 }
+
+/* ===== Candidate journey builder (src/flows-live.js) ===== */
+.fl-assign{display:grid;grid-template-columns:minmax(220px,320px) 1fr;gap:16px;margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2,#F6F8FB)}
+.fl-assign select,.fl-assign input{max-width:100%}
+.fl-rules{display:flex;flex-direction:column;gap:6px}
+.fl-rule{gap:6px;flex-wrap:wrap;align-items:center}
+.fl-rule input{width:140px}
+.fl-edit-h{gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:14px}
+.fl-top{gap:12px;margin-top:12px;flex-wrap:wrap}
+.fl-cols{display:grid;grid-template-columns:minmax(240px,320px) 1fr;gap:16px;margin-top:12px}
+.fl-lib,.fl-tl{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--surface)}
+.fl-lib h4,.fl-tl h4{margin:0 0 8px}
+.fl-lib{max-height:720px;overflow:auto}
+.fl-grp{margin-bottom:10px}
+.fl-gh{font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:6px 0}
+.fl-add{display:grid;grid-template-columns:auto 1fr auto auto;gap:8px;align-items:center;width:100%;text-align:left;border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:7px 9px;margin-bottom:5px;cursor:pointer;font:inherit;color:var(--ink)}
+.fl-add:hover{border-color:var(--hub,#1E4FA0);background:var(--hub-soft,#E6EEF9)}
+.fl-add b{color:var(--hub,#1E4FA0);font-size:1.1rem}
+.fl-step{border:1px solid var(--line);border-left:3px solid var(--hub,#1E4FA0);border-radius:9px;padding:8px 10px;margin-bottom:6px;background:var(--surface)}
+.fl-step.own{border-left-color:#8A6D1E}
+.fl-s1{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.fl-s1 input{flex:1;min-width:180px}
+.fl-s2{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.fl-s2 label{display:flex;gap:6px;align-items:center}
+.fl-when{width:72px;text-align:center;font-weight:600}
+.fl-docs{display:flex;gap:8px}
+.fl-step textarea{width:100%;margin-top:6px;font:inherit;font-size:.88rem}
+.fl-tip{margin-top:10px}
+.cad-old summary{cursor:pointer}
+@media (max-width:980px){.fl-assign,.fl-cols{grid-template-columns:1fr}}
+
+/* ===== Word offer letters (src/letters-live.js) ===== */
+.dx-status{flex-shrink:0}
+.dx-ed{margin-top:14px;padding:14px;border:1px solid var(--hub,#1E4FA0);border-radius:12px;background:var(--surface-2,#F6F8FB)}
+.dx-map td{vertical-align:top}
+.dx-map select,.dx-map input{width:100%;min-width:180px}
+.dx-map tr.need td{background:#FFF7E0}
+.dx-map code{font-size:.82rem;white-space:nowrap}
+.dx-warn{margin-top:8px;padding:8px 10px;border-radius:8px;background:#FFF4E5;color:#7A4A00;font-size:.88rem}
+.dx-tbl{border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px;background:var(--surface)}
+.dx-cols{display:flex;flex-wrap:wrap;gap:10px;margin:8px 0}
+.dx-cols label{display:flex;flex-direction:column;gap:3px}
+.dx-comps{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:6px}
+.dx-comp{display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid var(--line);border-radius:8px}
+.dx-comp.on{border-color:var(--hub,#1E4FA0);background:var(--hub-soft,#E6EEF9)}
+.dx-comp input[type=text]{font-size:.85rem}
+.dx-panel{display:flex;flex-direction:column;gap:8px;margin-bottom:10px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2,#F6F8FB)}
+.dx-asks{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+#letterPrev.dx-on{padding:8px;background:#E9EDF3;max-height:760px;overflow:auto}
+#letterPrev .dx-doc .docx-wrapper{background:transparent;padding:0}
+#letterPrev .dx-doc section.docx{box-shadow:0 2px 10px rgba(19,40,74,.15);margin-bottom:12px}
+#flRuleAdd{align-self:flex-start}

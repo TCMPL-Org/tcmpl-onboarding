@@ -15,7 +15,10 @@
     "@azure/cosmos": "^4.10.1",
     "@azure/functions": "^4.17.0",
     "@azure/storage-blob": "^12.34.0",
-    "jimp": "^1.6.1"
+    "@xmldom/xmldom": "^0.9.12",
+    "jimp": "^1.6.1",
+    "jszip": "^3.10.2",
+    "pdf-lib": "^1.17.1"
   },
   "overrides": {
     "zod": "^4.6.7"

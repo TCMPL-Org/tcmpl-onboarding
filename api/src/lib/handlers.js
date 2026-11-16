@@ -29,7 +29,10 @@ async function data({ method, col, id, body, user, candidateId }) {
   if (!user) return json(401, { error: 'sign_in_required' });
   if (!validCol(col)) return json(404, { error: 'unknown_collection' });
   if (id !== undefined && id !== null && id !== '' && !validId(id)) return json(400, { error: 'bad_id' });
-  if (col === 'letters' || col === 'users') return json(403, { error: 'not_available' }); // users: only through /api/access
+  if (col === 'letters' || col === 'users' || col === 'letterfiles') return json(403, { error: 'not_available' }); // users: only through /api/access
+  // Word letter templates, signatories and the approval log change only through /api/letters.
+  if ((col === 'lettertpl' || col === 'signatories' || col === 'letterlog') && method !== 'GET') return json(403, { error: 'read_only' });
+  if (col === 'letterlog' && user.role && user.role !== 'admin') return json(403, { error: 'admin_only' });
   if ((col === 'messages' || col === 'documents' || col === 'content' || col === 'calls') && method !== 'GET') return json(403, { error: 'read_only' });
   // Module switches and Exit records change only through their own routes (/api/modules, /api/exit).
   if ((col === 'modules' || col.startsWith('exit_')) && method !== 'GET') return json(403, { error: 'read_only' });
@@ -48,6 +51,8 @@ async function data({ method, col, id, body, user, candidateId }) {
     // Salary calculator: statutory constants, minimum wages and formula columns (ctc/config) are changed by admins only;
     // a client's salary rules (clients/<id>.ctc) too: an HR save of the client record keeps the stored rules.
     if (col === 'ctc' && method !== 'GET' && user.role && user.role !== 'admin') return json(403, { error: 'admin_only' });
+    // Named journeys are shared by all clients: changed by admins and HR who work across all clients.
+    if (col === 'flows' && method !== 'GET' && user.role && user.role !== 'admin' && !access.allClients(user)) return json(403, { error: 'all_clients_only' });
     if (col === 'clients' && method === 'PUT' && user.role && user.role !== 'admin' && body && typeof body === 'object') {
       const prev = await store.get(col, id);
       body = Object.assign({}, body);

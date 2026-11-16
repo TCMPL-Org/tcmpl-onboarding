@@ -51,13 +51,17 @@ const MEDIA_MAX_AGE_MS = 25 * 24 * 3600 * 1000; // WhatsApp keeps uploaded media
 
 // Returns a WhatsApp media id for the candidate's offer letter, re-uploading the PDF
 // saved in the database when there is none yet or the upload is getting old.
+// The offer letter is a PDF, or a Word file when Microsoft 365 PDF conversion is not set up for Word templates.
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const letterMime = name => (/\.docx$/i.test(String(name || '')) ? DOCX_MIME : 'application/pdf');
+
 async function letterMedia(store, candidateId, cand) {
   const fresh = cand.letterMediaId && cand.letterUploadedAt && (Date.now() - Date.parse(cand.letterUploadedAt)) < MEDIA_MAX_AGE_MS;
   if (fresh) return cand.letterMediaId;
   const rec = await store.get('letters', candidateId);
   if (!rec || !rec.data || !rec.data.pdfBase64) return cand.letterMediaId || '';
   cand.letterFile = rec.data.filename || cand.letterFile || 'Offer_Letter.pdf';
-  cand.letterMediaId = await wa.uploadMedia(Buffer.from(rec.data.pdfBase64, 'base64'), 'application/pdf', cand.letterFile);
+  cand.letterMediaId = await wa.uploadMedia(Buffer.from(rec.data.pdfBase64, 'base64'), letterMime(cand.letterFile), cand.letterFile);
   cand.letterUploadedAt = new Date().toISOString();
   cand.hasLetter = true;
   return cand.letterMediaId;
@@ -70,6 +74,9 @@ function cleanProfile(p) {
   for (const k of ['name', 'first', 'mobile', 'email', 'role', 'dept', 'grade', 'state', 'doj', 'mgr', 'client']) out[k] = str(p[k], 200);
   for (const k of ['ctc', 'monthly', 'gross']) out[k] = Number.isFinite(+p[k]) ? Math.round(+p[k]) : 0;
   out.isMgr = Boolean(p.isMgr); out.esic = Boolean(p.esic);
+  // The named journey chosen at release (Client setup → Candidate journey) and the documents it asks for.
+  out.flow = /^fl-[a-z0-9-]{3,40}$/.test(String(p.flow || '')) ? String(p.flow) : '';
+  if (Array.isArray(p.docsWant)) out.docsWant = p.docsWant.filter(t => ['aadhaar', 'pan', 'bank'].includes(t)).slice(0, 3);
   return out;
 }
 
@@ -114,7 +121,7 @@ async function startForOffer(p, user) {
     cand.hasLetter = true;
     await store.put('letters', candidateId, { pdfBase64: pdf, filename: cand.letterFile }, user);
     if (wa.waConfigured()) {
-      try { cand.letterMediaId = await wa.uploadMedia(Buffer.from(pdf, 'base64'), 'application/pdf', cand.letterFile); cand.letterUploadedAt = new Date().toISOString(); }
+      try { cand.letterMediaId = await wa.uploadMedia(Buffer.from(pdf, 'base64'), letterMime(cand.letterFile), cand.letterFile); cand.letterUploadedAt = new Date().toISOString(); }
       catch (e) { cand.letterError = e.message; }
     }
   }
@@ -123,7 +130,7 @@ async function startForOffer(p, user) {
   if (await notify.toCandidate(store, candidateId, cand, {
     subject: `Your offer from ${cand.company || cand.clientLabel || 'us'}`, offer: true, kind: 'offer', key: 'offer',
     text: `Dear ${cand.first || cand.name || 'candidate'},\n\nCongratulations! Please find your offer letter for the role of ${cand.role || 'the position'} attached${cand.doj ? ', with joining on ' + niceDate(cand.doj) : ''}.${letterNote(cand)}\n\nWe have also sent it to you on WhatsApp, where our onboarding assistant can answer your questions.`,
-    attachments: pdf ? [{ name: cand.letterFile, contentType: 'application/pdf', base64: pdf }] : []
+    attachments: pdf ? [{ name: cand.letterFile, contentType: letterMime(cand.letterFile), base64: pdf }] : []
   })) await store.put('candidates', candidateId, cand, user);
   if (!wa.waConfigured()) return { status: 200, body: { candidateId, sent: false, reason: 'whatsapp_not_configured' } };
   try {
@@ -287,7 +294,7 @@ async function pushItems(p, user) {
       const fresh = typeof lt.pdfBase64 === 'string' && lt.pdfBase64.length > 100 && lt.pdfBase64.length < MAX_PDF_B64 ? lt.pdfBase64 : '';
       const saved = fresh ? null : await store.get('letters', candidateId);
       const b64 = fresh || (saved && saved.data && saved.data.pdfBase64) || '';
-      if (b64) att = [{ name: str(lt.filename, 150) || cand.letterFile || 'Offer_Letter.pdf', contentType: 'application/pdf', base64: b64 }];
+      if (b64) { const nm = (fresh && str(lt.filename, 150)) || (saved && saved.data && saved.data.filename) || cand.letterFile || 'Offer_Letter.pdf'; att = [{ name: nm, contentType: letterMime(nm), base64: b64 }]; }
     }
     const texts = items.filter(it => it && it.type === 'text' && typeof it.text === 'string').map(it => it.text.trim());
     const opts = items.filter(it => it && Array.isArray(it.buttons)).flatMap(it => it.buttons);
