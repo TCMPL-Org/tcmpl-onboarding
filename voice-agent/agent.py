@@ -11,7 +11,8 @@ Secrets / settings (LiveKit Cloud agent secrets, or .env.local when running loca
   CALL_RESULT_URL            https://<app>/api/calls/result
   CALL_AGENT_SECRET          shared secret, the same value as in the app's Azure settings
   AGENT_NAME                 optional, default tcmpl-onboarding-caller
-  VOICE_SPEAKER              optional Sarvam bulbul:v3 speaker, default priya
+  VOICE_SPEAKER              optional female Sarvam voice: a bulbul:v4-flash name (default simran_enhi_customer)
+                             or a bulbul:v3 name such as priya; male names are ignored
   VOICE_LLM_DEPLOYMENT       optional: a faster Azure deployment just for calls (default AZURE_OPENAI_DEPLOYMENT)
   VOICE_LLM_MODEL            optional: the model behind it, e.g. gpt-4.1-mini or gpt-5-mini (reasoning models are
                              then asked to think minimally, which removes seconds of delay)
@@ -46,6 +47,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.plugins import openai, sarvam, silero
+from livekit.plugins.sarvam import models as sarvam_models
 
 import scripts
 
@@ -88,6 +90,30 @@ def llm_options() -> dict:
     elif re.match(r"^o\d", name):
         opts["reasoning_effort"] = "low"
     return opts
+
+
+# The assistant is a woman: only female Sarvam voices are used; anything else falls back to the default.
+# Default: Bulbul v4-flash "simran_enhi_customer" (Hinglish, customer care), about a third of v3's price; the
+# Attendance Agent runs on it. v4 voice names carry a language and a style ("simran_enhi_customer"), v3 names do not
+# ("priya"), and each model refuses the other's names, so the name decides the model.
+DEFAULT_VOICE = "simran_enhi_customer"
+FEMALE_NAMES = {"simran", "ishita", "shalini", "sanchita", "neha", "aparna", "aditi", "chandrika", "nupur", "roopa",
+                "kangkana", "mouchumi", "priya", "ritu", "pooja", "kavya", "shreya", "suhani", "rupali", "tanya",
+                "shruti", "kavitha", "amelia", "sophia"}
+
+
+def voice_for(meta: dict) -> tuple[str, str, float]:
+    """(Sarvam model, female speaker, pace) for this call."""
+    want = str(meta.get("voice") or os.getenv("VOICE_SPEAKER", "") or DEFAULT_VOICE).strip().lower()
+    if want.split("_")[0] not in FEMALE_NAMES:
+        want = DEFAULT_VOICE
+    if "_" in want:
+        if want not in sarvam_models.BULBUL_V4_FLASH_SPEAKERS:
+            want = DEFAULT_VOICE
+        return "bulbul:v4-flash", want, 0.95
+    if want not in sarvam_models.MODEL_SPEAKER_COMPATIBILITY["bulbul:v3"]["female"]:
+        return "bulbul:v4-flash", DEFAULT_VOICE, 0.95
+    return "bulbul:v3", want, 1.05
 
 
 def now_iso() -> str:
@@ -382,9 +408,10 @@ async def outbound_call(ctx: JobContext) -> None:
 
     await ctx.connect()
 
-    tts = sarvam.TTS(target_language_code=state.language, model="bulbul:v3",
-                     speaker=meta.get("voice") or os.getenv("VOICE_SPEAKER", "priya"), pace=1.05,
+    voice_model, speaker, pace = voice_for(meta)
+    tts = sarvam.TTS(target_language_code=state.language, model=voice_model, speaker=speaker, pace=pace,
                      min_buffer_size=30)
+    logger.info("voice %s (%s)", speaker, voice_model)
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         stt=sarvam.STTRealtime(language="auto" if meta.get("language") in (None, "", "auto") else state.language,
