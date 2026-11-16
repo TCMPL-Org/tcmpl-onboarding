@@ -122,44 +122,17 @@ def now_iso() -> str:
 
 # Short sounds said only after the candidate has finished speaking, and only while the answer is still being
 # prepared. They are pre-recorded at the start of the call and played as the first part of the reply itself,
-# so a filler can never come after the agent has spoken. The kind of filler follows what the candidate said.
+# so a filler can never come after the agent has spoken, and there is at most one per candidate turn.
+# Okay / Sure and the four Hindi words are the Attendance Agent's, chosen there by listening in every Sarvam voice.
+# Alright / Okay, got it / Got it / Right were added by HR (16 Nov 2026); the Attendance team had left them out
+# ("Got it" said like a question, "Alright" dragged, "Right" heard as "Wait") - listen for that and drop any that
+# sound wrong in this voice. "Hmm" and, on English calls, "Achha" stay out.
 FILLERS = {
-    "en-IN": {
-        "question": ["Sure…", "Good question…", "Let me tell you…"],
-        "yes": ["Great…", "Okay…", "Alright…"],
-        "problem": ["I understand…", "Okay, got it…"],
-        "other": ["Okay…", "Got it…", "Right…", "Alright…"],
-    },
-    "hi-IN": {
-        "question": ["जी, बताती हूँ…", "Sure…"],
-        "yes": ["बढ़िया…", "Okay जी…", "ठीक है…"],
-        "problem": ["समझ गई…", "अच्छा, ठीक है…"],
-        "other": ["अच्छा…", "ठीक है…", "हाँ जी…", "Okay…"],
-    },
+    "en-IN": ["Okay.", "Sure.", "Alright.", "Okay, got it.", "Got it.", "Right."],
+    "hi-IN": ["जी।", "अच्छा।", "ठीक है।", "हाँ जी।"],
 }
 FILLER_AFTER = 0.5   # seconds of silence after the candidate stops before a filler is played
 SHORT_AFTER = 1.0    # after a one-word answer ("yes", "haan") wait a little longer: that reply is usually quick
-
-_Q = re.compile(r"\?|^(what|when|where|why|how|which|who|can|could|will|is|are|do|does|kya|kab|kaise|kahan|kitna|kitne|kaun|kyun)\b", re.I)
-_YES = re.compile(r"^(yes|yeah|yep|ok|okay|sure|done|haan|ha|han|ji|hmm|right|correct|theek|thik|bilkul)\b", re.I)
-_PROBLEM = re.compile(r"\b(no|not|nahi|nahin|can't|cannot|won't|problem|issue|delay|late|sorry|mushkil|dikkat)\b", re.I)
-
-
-_Q_HI = ("क्या", "कब", "कैसे", "कहाँ", "कहां", "कितना", "कितने", "कौन", "क्यों")
-_PROBLEM_HI = ("नहीं", "नही", "प्रॉब्लम", "दिक्कत", "मुश्किल", "लेट", "सॉरी")
-_YES_HI = ("हाँ", "हां", "जी", "ठीक", "बिल्कुल", "ओके", "हम्म")
-
-
-def filler_kind(text: str) -> str:
-    t = (text or "").strip()
-    if _Q.search(t) or any(w in t for w in _Q_HI):
-        return "question"
-    if _PROBLEM.search(t) or any(w in t for w in _PROBLEM_HI):
-        return "problem"
-    if _YES.search(t) or t.startswith(_YES_HI):
-        return "yes"
-    return "other"
-
 
 def trim_silence(frame: rtc.AudioFrame, threshold: int = 300) -> rtc.AudioFrame:
     """Cut the quiet start and end of a recorded filler so it starts the moment it is played."""
@@ -206,7 +179,6 @@ class OnboardingCaller(Agent):
         self._tts = tts
         self._clips: dict[tuple[str, str], list[rtc.AudioFrame]] = {}
         self._turn_done_at: float | None = None   # when the candidate's last turn ended (None while they talk)
-        self._turn_kind = "other"
         self._turn_words = 0
         self._filler_for: float | None = None     # the turn that already got its filler
         self._timed_for: float | None = None      # the turn whose reply delay was already logged
@@ -218,27 +190,24 @@ class OnboardingCaller(Agent):
 
     async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
         text = new_message.text_content or ""
-        self._turn_kind = filler_kind(text)
         self._turn_words = len(text.split())
         self._turn_done_at = time.monotonic()
 
     async def prepare_fillers(self, language: str) -> None:
         """Record every filler for this language once (a few hundred characters of Sarvam voice)."""
-        for words in FILLERS.get(language, FILLERS["en-IN"]).values():
-            for w in words:
-                if (language, w) in self._clips:
-                    continue
-                try:
-                    frame = await self._tts.synthesize(w).collect()
-                    self._clips[(language, w)] = split_frames(trim_silence(frame))
-                except Exception as e:  # a missing filler only means no filler
-                    logger.warning("filler %r not recorded: %s", w, e)
+        for w in FILLERS.get(language, FILLERS["en-IN"]):
+            if (language, w) in self._clips:
+                continue
+            try:
+                frame = await self._tts.synthesize(w).collect()
+                self._clips[(language, w)] = split_frames(trim_silence(frame))
+            except Exception as e:  # a missing filler only means no filler
+                logger.warning("filler %r not recorded: %s", w, e)
         logger.info("fillers ready for %s: %d", language, sum(1 for (lang, _) in self._clips if lang == language))
 
     def _pick_filler(self) -> list[rtc.AudioFrame] | None:
         lang = self.state.language
-        options = FILLERS.get(lang, FILLERS["en-IN"])
-        words = [w for w in options.get(self._turn_kind, options["other"]) if (lang, w) in self._clips]
+        words = [w for w in FILLERS.get(lang, FILLERS["en-IN"]) if (lang, w) in self._clips]
         if not words:
             return None
         fresh = [w for w in words if w != self.state.last_filler] or words
@@ -276,8 +245,8 @@ class OnboardingCaller(Agent):
                             self._filler_for = self._turn_done_at
                             clip = self._pick_filler()
                             if clip:
-                                logger.info("filler %r (%s) %.2fs after the candidate stopped", self.state.last_filler,
-                                            self._turn_kind, time.monotonic() - self._turn_done_at)
+                                logger.info("filler %r %.2fs after the candidate stopped", self.state.last_filler,
+                                            time.monotonic() - self._turn_done_at)
                             for f in clip or []:
                                 yield f
                             waiting = False
