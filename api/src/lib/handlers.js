@@ -33,6 +33,9 @@ async function data({ method, col, id, body, user, candidateId }) {
   // Word letter templates, signatories and the approval log change only through /api/letters.
   if ((col === 'lettertpl' || col === 'signatories' || col === 'letterlog') && method !== 'GET') return json(403, { error: 'read_only' });
   if (col === 'letterlog' && user.role && user.role !== 'admin') return json(403, { error: 'admin_only' });
+  if (col === 'deletions' && (method !== 'GET' || (user.role && user.role !== 'admin'))) return json(403, { error: 'admin_only' });
+  // A candidate is deleted with everything about them through /api/candidates/delete, never piecemeal.
+  if (col === 'candidates' && method === 'DELETE') return json(403, { error: 'use_candidate_delete' });
   if ((col === 'messages' || col === 'documents' || col === 'content' || col === 'calls') && method !== 'GET') return json(403, { error: 'read_only' });
   // Module switches and Exit records change only through their own routes (/api/modules, /api/exit).
   if ((col === 'modules' || col.startsWith('exit_')) && method !== 'GET') return json(403, { error: 'read_only' });

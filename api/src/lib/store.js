@@ -17,7 +17,9 @@ const COLLECTIONS = new Set(['structures', 'templates', 'plans', 'offers', 'clie
   // Module switches per client, and the Exit module's own collections (written only through /api/exit/...)
   'modules', 'users', 'calls', 'ctc',
   // Named candidate journeys; Word letter templates, signatories, their files and the approval log (written through /api/letters)
-  'flows', 'lettertpl', 'signatories', 'letterfiles', 'letterlog', 'exit_cases', 'exit_messages', 'exit_approvals', 'exit_clearances', 'exit_settlements', 'exit_interviews', 'exit_alumni', 'exit_setup', 'exit_documents']);
+  'flows', 'lettertpl', 'signatories', 'letterfiles', 'letterlog',
+  // One line per deleted candidate (who, when, client, last 4 digits): written by /api/candidates/delete
+  'deletions', 'exit_cases', 'exit_messages', 'exit_approvals', 'exit_clearances', 'exit_settlements', 'exit_interviews', 'exit_alumni', 'exit_setup', 'exit_documents']);
 const ID_RE = /^[A-Za-z0-9_.:-]{1,200}$/;
 
 function tenant() { return process.env.TENANT_ID || 'tcmpl'; }

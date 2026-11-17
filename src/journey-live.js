@@ -95,6 +95,7 @@ function mount() {
     <div class="row">
       <button class="btn small primary" id="jlNext" type="button">Go to next step</button>
       <button class="btn small" id="jlRefresh" type="button">Refresh</button>
+      <button class="btn small danger" id="jlDelete" type="button" hidden title="Admins only: removes this candidate and all their data">Delete candidate</button>
       <span id="jlCallBox" style="display:none;gap:6px;align-items:center">
         <select id="jlCallPurpose" aria-label="Call purpose"><option value="confirm">Offer confirmation</option><option value="noreply">No reply on WhatsApp</option><option value="eve">Day before joining</option><option value="close">90-day closing</option><option value="general">Other (add a note)</option></select>
         <button class="btn small" id="jlCall" type="button" title="The AI voice assistant calls the candidate from the company number and saves the answers here">📞 Call now</button>
@@ -129,6 +130,7 @@ function mount() {
   intro.after(wrap);
   $('#jlCand').onchange = () => { selected = $('#jlCand').value; sel = null; preview = null; lastSig = ''; docs = []; docEdit = null; missingQ = null; callsList = []; renderAll(); loadMsgs(true); loadDocs(); loadCalls(); };
   $('#jlRefresh').onclick = () => reload(selected);
+  $('#jlDelete').onclick = deleteCandidate;
   $('#jlCall').onclick = () => callNow();
   $('#jlNext').onclick = () => { const n = nextStep(); if (n) selectStep(n.id, true); };
   $('#jlDemo').onchange = () => setDemo($('#jlDemo').checked);
@@ -188,6 +190,7 @@ async function reload(want, stepId, opts = {}) {
   if (want && cands.some(c => c.id === want)) { if (selected !== want && !stepId) { sel = null; preview = null; } selected = want; }
   if (!cands.some(c => c.id === selected)) { selected = cands[0] ? cands[0].id : null; sel = null; preview = null; }
   await loadPlan(current());
+  if ($('#jlDelete')) $('#jlDelete').hidden = !(window.tcmplAccess && window.tcmplAccess.role === 'admin' && current());
   renderAll();
   if (stepId) selectStep(stepId, true);
   loadMsgs(true);
@@ -936,6 +939,21 @@ function stepCall(s) {
   if (s.ch === 'wa_call' && !STEP_CALL[s.key]) return { purpose: 'noreply', note: '' };
   return STEP_CALL[s.key] ? { purpose: STEP_CALL[s.key], note: '' } : { purpose: 'general', note: `This call is the journey step "${s.label}". Talk to the candidate about it, answer what you can and note anything HR should follow up.` };
 }
+// Admins: delete the open candidate and everything about them (api/src/lib/candidates.js). Cannot be undone.
+async function deleteCandidate() {
+  const c = current(); if (!c) return;
+  const name = c.name || '';
+  const typed = window.prompt(`Delete ${name} and ALL their data?\n\nThis removes their messages, documents (Aadhaar, PAN, bank proof and the files), offer letter, call records and offer. It cannot be undone. Messages already on their phone or in their email stay there.\n\nType the candidate's name to confirm:`, '');
+  if (typed === null) return;
+  const u = U();
+  const r = await u.getJson('/api/candidates/delete', { method: 'POST', body: JSON.stringify({ candidateId: c.id, confirmName: typed, client: (c.profile && c.profile.client) || undefined }) }).catch(() => ({ ok: false }));
+  if (!r.ok) { u.toast((r.body && r.body.detail) || u.explain(r)); return; }
+  const k = r.body.counts || {};
+  u.toast(`${name} deleted: ${k.messages || 0} messages, ${k.documents || 0} documents, ${k.calls || 0} calls${k.letter ? ', offer letter' : ''}.`);
+  selected = null; sel = null; preview = null;
+  await reload(null);
+}
+
 async function callNow(preset) {
   const c = current(); if (!c) return;
   const u = U();

@@ -490,3 +490,4 @@ body.tc-shell #clientSel,body.tc-shell #curSel{border-radius:10px}
 #letterPrev .dx-doc .docx-wrapper{background:transparent;padding:0}
 #letterPrev .dx-doc section.docx{box-shadow:0 2px 10px rgba(19,40,74,.15);margin-bottom:12px}
 #flRuleAdd{align-self:flex-start}
+.btn.danger{color:#B42318;border-color:#F3B8B2;background:#FFF5F4}.btn.danger:hover{background:#FDE7E5;border-color:#B42318}
