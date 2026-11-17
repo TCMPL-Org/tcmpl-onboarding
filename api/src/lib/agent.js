@@ -16,6 +16,26 @@ const OFFER_Q = /\b(salary|salaries|ctc|cost to company|basic|hra|house rent|all
 
 function isOfferQuestion(text) { return OFFER_Q.test(String(text || '')); }
 
+// Questions about opening the offer letter PDF (its password). Answered by a fixed message, never by the AI:
+// the password is the candidate's date of birth as DDMMYYYY. The rule is told; the password itself is never written.
+const PASSWORD_WORD = /pass\s?word|passcode|\bpwd\b|पासवर्ड/i;
+const CANT_OPEN = /\b(can'?t|cannot|unable to|not able to|couldn'?t|could not|not|nahi|nhi)\s+(be\s+)?(open|opening|opened)\b|\bnot\s+opening|\blocked\b|khul\s*(nahi|nhi|na)|open\s*(nahi|nhi)|खुल\s*(नहीं|नही)/i;
+const LETTER_WORD = /letter|pdf|file|offer|document|attachment|लेटर|पत्र/i;
+const STILL_STUCK = /still|again|not working|doesn'?t work|didn'?t work|wrong|incorrect|invalid|galat|abhi bhi|phir se|नहीं हो रहा|गलत/i;
+
+function isPasswordQuestion(text) { const t = String(text || ''); return PASSWORD_WORD.test(t) || (CANT_OPEN.test(t) && LETTER_WORD.test(t)); }
+
+function passwordReply(c, text) {
+  const t = String(text || ''), hi = /[ऀ-ॿ]/.test(t);
+  if (!c.letterProtected) {
+    return { reply: hi ? 'आपका ऑफ़र लेटर पासवर्ड से लॉक नहीं है, यह सीधे खुल जाना चाहिए। अगर नहीं खुल रहा, तो मैं HR टीम को बता रही हूँ, वे आपको सही कॉपी भेज देंगे।' : "Your offer letter isn't password-protected, so it should open directly. If it still doesn't open, I've let the HR team know and they'll send you a fresh copy.", handover: true, handoverReason: 'Candidate cannot open the offer letter (not password-protected)', callback: '', riskSignals: [] };
+  }
+  if (STILL_STUCK.test(t)) {
+    return { reply: hi ? 'माफ़ कीजिए! मैं यह HR टीम को भेज रही हूँ, वे आपकी जन्मतिथि जाँचकर आपको जल्दी मदद करेंगे।' : "Sorry about that! I've passed this to the HR team. They'll check the date of birth on your offer and help you open it shortly.", handover: true, handoverReason: 'Candidate cannot open the offer letter with the date-of-birth password (check the DOB entered at release)', callback: '', riskSignals: [] };
+  }
+  return { reply: hi ? 'आपका ऑफ़र लेटर PDF आपकी जन्मतिथि से खुलेगा, DDMMYYYY फ़ॉर्मैट में: 8 अंक, बिना स्पेस या / के। उदाहरण: 5 मार्च 1998 = 05031998।' : 'Your offer letter PDF opens with your *date of birth* as DDMMYYYY: 8 digits, no spaces or slashes. For example, 5 March 1998 would be 05031998.', handover: false, handoverReason: '', callback: '', riskSignals: [] };
+}
+
 function today() {
   return new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
 }
@@ -26,6 +46,7 @@ function buildPrompt(c, history, text, letter) {
   const base = `You are "${agentName}", the WhatsApp onboarding assistant for ${company}, run by Talent Carriage for the HR team. You are talking to ${c.name || 'a candidate'}, a candidate who has an offer. Today is ${today()}.
 Rules: answer ONLY from FACTS${letter ? ', FAQ and THE CANDIDATE\'S OFFER LETTER' : ' and FAQ'}. Plain WhatsApp style, warm, no headings. Reply in the language and script the candidate used (English, Hindi, Hinglish or Kannada).
 Never negotiate or change salary, joining date, role, notice, buyout or any term, and never promise anything. For those, for complaints, harassment, health matters, or anything not covered: say you are passing it to the hiring team who will call within one working day, and set handover true.
+The offer letter PDF${c.letterProtected ? ' is password-protected: the password is the candidate\'s date of birth as DDMMYYYY (8 digits). Never say it is the joining date, and never write the password itself' : ' is not password-protected'}.
 If the candidate asks to talk to a person or be called back, set "callback" to a short topic in lower case, e.g. "your PF nomination question".`;
   const offerRules = letter ? `
 THE CANDIDATE'S OFFER LETTER is the exact document sent to ${c.name || 'this candidate'} (their own letter only). For questions about their offer:
@@ -88,6 +109,7 @@ const CHECK_REPLY = "Let me confirm the exact figure with the hiring team so you
 async function reply(candidate, history, text, opts = {}) {
   const c = candidate || {}, h = history || [];
   const letter = String(opts.letter || '');
+  if (isPasswordQuestion(text)) return Object.assign({ source: 'scripted' }, passwordReply(c, text));
   if (aiConfigured()) {
     try {
       let out = null, usedLetter = false;
@@ -114,4 +136,4 @@ function riskWeight(signal) {
   return /counter|competing|another offer/i.test(signal) ? 40 : 15;
 }
 
-module.exports = { reply, buildPrompt, scripted, riskWeight, isOfferQuestion, unknownAmount };
+module.exports = { reply, isPasswordQuestion, passwordReply, buildPrompt, scripted, riskWeight, isOfferQuestion, unknownAmount };
