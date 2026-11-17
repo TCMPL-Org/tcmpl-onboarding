@@ -106,7 +106,7 @@ function inWords(n) {
 
 window.tcmplInWords = inWords;
 
-let tpls = [], sigs = [], status = { graph: false, storage: false, admin: false }, loaded = false;
+let tpls = [], sigs = [], status = { pdf: false, service: '', storage: false, admin: false }, loaded = false;
 const asks = {}; // template id -> { FIELD: value } typed on the Offer desk
 const tplById = id => tpls.find(t => t.id === id);
 const scanOf = t => { const d = t && t.data; const v = d && (d.versions || []).find(x => x.v === d.current); return (v && v.scan) || { fields: [], regions: [], images: [] }; };
@@ -189,7 +189,7 @@ function renderCard() {
   const setCount = t => { const m = mapOf(t); const need = Object.entries(m).filter(([k, x]) => scanOf(t).fields.some(f => f.name === k) && x.src === 'fixed' && !x.value).length; return need; };
   card.innerHTML = `<div class="row" style="justify-content:space-between;align-items:flex-start"><div><h3>Word offer letters</h3>
       <p class="note" style="margin:4px 0 0">Upload the client's own Word letter (with «placeholders», like HROne letters). The tool fills it from the offer, the salary calculator and this setup, keeps its exact layout, and adds the signature only when the offer is approved.</p></div>
-      <div class="dx-status"><span class="chip ${status.graph ? 'ok' : 'warn'}">${status.graph ? 'PDF through Microsoft 365: on' : 'Microsoft 365 PDF: not connected · letters go as Word files'}</span></div></div>
+      <div class="dx-status"><span class="chip ${status.pdf ? 'ok' : 'warn'}">${status.pdf ? 'PDF converter: on' : 'PDF converter not connected · Word letters cannot be sent yet'}</span></div></div>
     <div class="tscroll" style="margin-top:10px"><table class="dx-list"><tr><th>Template</th><th>Used for</th><th>Version</th><th>Set-up</th><th></th></tr>
     ${mine.length ? mine.map(t => { const d = t.data, v = (d.versions || [])[0] || {}; const need = setCount(t); const sc = scanOf(t);
       return `<tr><td><b>${esc(d.name)}</b><div class="note">${sc.fields.length} placeholders · ${sc.regions.length} salary tables · ${sc.images.length} pictures</div></td>
@@ -393,7 +393,7 @@ async function preview() {
   if (!r.ok) { if (state) state.textContent = r.body.detail || 'The letter preview could not be made.'; lastKey = ''; return; }
   const miss = r.body.missing || [];
   if (state) state.innerHTML = (miss.length ? `<span class="chip warn">${miss.length} still empty</span> ${esc(miss.map(pretty).join(', '))} · highlighted in yellow. Fill them in (Offer letters, or the boxes above) before approving.`
-    : '<span class="chip ok">Ready to approve</span> Every placeholder is filled.') + (status.graph ? '' : ' <span class="note">Until Microsoft 365 is connected the candidate gets a Word file.</span>');
+    : '<span class="chip ok">Ready to approve</span> Every placeholder is filled.') + (status.pdf ? '' : ' <span class="note">The PDF converter is not connected yet, so this letter cannot be sent. Use a text template until it is.</span>');
   const lp = $('#letterPrev');
   try {
     docxLib = docxLib || await import('docx-preview');
@@ -439,7 +439,7 @@ window.tcmplDocxFinal = finalLetter;
 window.tcmplDocxDownload = async kind => {
   const t = curTpl(); if (!t) return;
   if (kind === 'pdf') {
-    if (!status.graph) { toast('PDF needs Microsoft 365 to be connected. Use "Download Word" for now.'); return; }
+    if (!status.pdf) { toast('The PDF converter is not connected yet. Use "Download Word" to check the draft.'); return; }
     if (!window.confirm('This makes the approved, signed letter (it is recorded as approved by you). Continue?')) return;
     const L = await finalLetter(); if (L) saveAs(L.blob, L.fileName);
     return;

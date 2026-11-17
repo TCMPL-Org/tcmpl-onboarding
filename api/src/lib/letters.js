@@ -11,7 +11,7 @@
 //                      except the Word template itself (to admins and HR who can see the client).
 //
 // POST /api/letters/{action}
-//   status                         { graph, storage }
+//   status                         { pdf, service, storage, admin }  (pdf: a Word->PDF converter is connected)
 //   upload    (admin)  { id?, name, client, fileName, base64 }     new template, or a new version of id
 //   save      (admin)  { id, name, client, map, tables, images, dateFmt }
 //   delete    (admin)  { id }
@@ -21,18 +21,18 @@
 //   signatory-delete (admin) { id }
 //   render             { id, client, fields, tables, signatoryId?, final?, password?, candidate? }
 //       preview -> { docxBase64, missing }   (no signature; blanks highlighted)
-//       final   -> { base64, mime, fileName, protected, pdf }      (409 { error:'missing', missing } when incomplete)
+//       final   -> the signed PDF { base64, mime, fileName, protected, text }; 409 when a value is missing or no PDF converter is set up
 
 const crypto = require('crypto');
 const { getStore } = require('./store');
 const blob = require('./blob');
 const access = require('./access');
 const merge = require('./docx-merge');
-const graph = require('./graph');
+const pdfconvert = require('./pdfconvert');
 const pdfLock = require('./pdf-lock');
 
 const MAX_DOCX = 5 * 1024 * 1024, MAX_PIC = 1024 * 1024;
-const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'; // templates and HR drafts only
 const res = (status, body) => ({ status, body });
 const str = (v, n) => String(v == null ? '' : v).slice(0, n);
 const isAdmin = u => !u.role || u.role === 'admin';
@@ -251,14 +251,18 @@ async function render(store, p, user) {
   if (out.missing.length) return res(409, { error: 'missing', missing: out.missing, detail: 'Fill in: ' + out.missing.join(', ') });
 
   const base = (str(p.fileName, 100) || 'Offer_Letter').replace(/[^\w.-]+/g, '_').replace(/\.(pdf|docx)$/i, '');
-  let file = out.buffer, mime = DOCX_MIME, ext = 'docx', isPdf = false, locked = false, note = '';
-  if (graph.graphConfigured()) {
-    try {
-      file = await graph.docxToPdf(out.buffer); mime = 'application/pdf'; ext = 'pdf'; isPdf = true;
-      const pw = /^\d{8}$/.test(String(p.password || '')) ? String(p.password) : '';
-      if (pw) { file = await pdfLock.lock(file, pw); locked = true; }
-    } catch (e) { note = 'PDF conversion failed, so the Word file is used: ' + e.message; console.error('letter pdf', e && e.message); file = out.buffer; mime = DOCX_MIME; ext = 'docx'; isPdf = false; locked = false; }
-  } else note = 'Microsoft 365 PDF conversion is not set up, so the letter goes as a Word file.';
+  // Candidates only ever get the PDF: without a working converter nothing is released.
+  if (!pdfconvert.pdfConfigured()) return res(409, { error: 'pdf_not_set_up', detail: 'Not sent: PDF conversion for Word letters is not set up yet. Ask an admin to connect the PDF converter, or use a text template for now.' });
+  let file, locked = false;
+  try {
+    file = await pdfconvert.docxToPdf(out.buffer);
+    const pw = /^\d{8}$/.test(String(p.password || '')) ? String(p.password) : '';
+    if (pw) { file = await pdfLock.lock(file, pw); locked = true; }
+  } catch (e) {
+    console.error('letter pdf', e && e.message);
+    return res(502, { error: 'pdf_failed', detail: 'Not sent: the PDF could not be made just now. Please try again in a minute.' });
+  }
+  const mime = 'application/pdf', ext = 'pdf', isPdf = true, note = '';
   const at = new Date().toISOString();
   await store.put('letterlog', newId('lg'), {
     template: p.id, templateName: d.name, version: v, client: str(p.client, 60) || d.client, candidate: str(p.candidate && p.candidate.name, 120),
@@ -275,7 +279,7 @@ async function handle(action, p, user) {
   p = p && typeof p === 'object' ? p : {};
   try {
     switch (action) {
-      case 'status': return res(200, { graph: graph.graphConfigured(), storage: blob.storageConfigured(), admin: isAdmin(user) });
+      case 'status': return res(200, { pdf: pdfconvert.pdfConfigured(), service: pdfconvert.pdfService(), storage: blob.storageConfigured(), admin: isAdmin(user) });
       case 'upload': return await upload(store, p, user);
       case 'save': return await save(store, p, user);
       case 'delete': return await remove(store, p, user);

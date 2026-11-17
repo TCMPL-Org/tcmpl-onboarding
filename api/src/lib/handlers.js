@@ -22,7 +22,7 @@ const json = (status, body) => ({ status, jsonBody: body });
 
 function health() {
   const store = getStore();
-  return json(200, { ok: true, db: Boolean(store), store: store ? store.kind : null, ai: aiConfigured(), whatsapp: wa.waConfigured(), webhook: wa.webhookConfigured(), ocr: docintelConfigured(), storage: storageConfigured(), scheduler: Boolean(process.env.CRON_SECRET), email: emailConfigured(), exit: modules.loaded('exit'), calls: require('./calls').callsConfigured() });
+  return json(200, { ok: true, db: Boolean(store), store: store ? store.kind : null, ai: aiConfigured(), whatsapp: wa.waConfigured(), webhook: wa.webhookConfigured(), ocr: docintelConfigured(), storage: storageConfigured(), scheduler: Boolean(process.env.CRON_SECRET), email: emailConfigured(), exit: modules.loaded('exit'), calls: require('./calls').callsConfigured(), pdf: require('./pdfconvert').pdfConfigured() });
 }
 
 async function data({ method, col, id, body, user, candidateId }) {

@@ -132,24 +132,50 @@ test('letters API: admin uploads and sets up; HR previews; final letter needs ev
 
   r = await letters.handle('render', { id, client: 'northpeak', final: true, fields: { COMPANY: 'Northpeak' } }, hr);
   assert.equal(r.status, 409);
+  // Candidates only ever get a PDF: with no converter connected, nothing is released.
   r = await letters.handle('render', { id, client: 'northpeak', final: true, fields }, hr);
-  assert.equal(r.status, 200, 'no signatory set up yet: the letter still goes, without the signature picture');
-  assert.ok(!(await textOf(Buffer.from(r.body.base64, 'base64'))).doc.includes('<w:drawing>'));
-  r = await letters.handle('render', { id, client: 'northpeak', final: true, fields, signatoryId: 'sg-0000000000' }, hr);
-  assert.equal(r.status, 409, 'an unknown signatory is refused');
+  assert.equal(r.status, 409);
+  assert.equal(r.body.error, 'pdf_not_set_up');
 
-  r = await letters.handle('signatory-save', { client: 'northpeak', name: 'Asha Rao', designation: 'HR Head', base64: png().toString('base64') }, hr);
-  assert.equal(r.status, 403, 'HR cannot add signatures');
-  r = await letters.handle('signatory-save', { client: 'northpeak', name: 'Asha Rao', designation: 'HR Head', base64: png().toString('base64') }, admin);
-  assert.equal(r.status, 200);
-  const sid = r.body.id;
-  r = await letters.handle('render', { id, client: 'northpeak', final: true, fields, signatoryId: sid, fileName: 'Offer_Letter_Ritika', candidate: { name: 'Ritika Sharma', mobile: '919810000000' } }, hr);
-  assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.equal(r.body.pdf, false, 'without Microsoft 365 the Word file goes');
-  assert.equal(r.body.fileName, 'Offer_Letter_Ritika.docx');
-  assert.match(r.body.note, /Microsoft 365/);
-  assert.ok((await textOf(Buffer.from(r.body.base64, 'base64'))).doc.includes('<w:drawing>'), 'approved letter is signed');
-  assert.ok(r.body.text.includes('Dear Ritika Sharma') && r.body.text.includes('Monthly CTC: 80,000'), 'the same letter as text, for the agent');
+  // With the converter in Azure (Gotenberg): PDF, locked with the date of birth.
+  const { PDFDocument } = require('pdf-lib');
+  const sample = await PDFDocument.create(); sample.addPage([200, 200]);
+  const samplePdf = Buffer.from(await sample.save());
+  const realFetch = global.fetch; const calls = [];
+  global.fetch = async (url, opts) => { calls.push({ url: String(url), auth: opts.headers.authorization, body: opts.body }); return { ok: true, status: 200, arrayBuffer: async () => samplePdf }; };
+  Object.assign(process.env, { GOTENBERG_URL: 'https://tcmpl-pdf.example.azurecontainerapps.io', GOTENBERG_USER: 'tc', GOTENBERG_PASSWORD: 'pw' });
+  try {
+    assert.equal((await letters.handle('status', {}, hr)).body.pdf, true);
+    r = await letters.handle('render', { id, client: 'northpeak', final: true, fields, password: '05031998' }, hr);
+    assert.equal(r.status, 200, 'no signatory set up yet: the letter still goes, without the signature picture');
+    assert.equal(r.body.mime, 'application/pdf');
+    assert.equal(r.body.protected, true);
+    assert.match(calls[0].url, /\/forms\/libreoffice\/convert$/);
+    assert.equal(calls[0].auth, 'Basic ' + Buffer.from('tc:pw').toString('base64'));
+    assert.ok(calls[0].body instanceof FormData);
+    const sent = await calls[0].body.get('files').arrayBuffer();
+    assert.ok(!(await textOf(Buffer.from(sent))).doc.includes('<w:drawing>'), 'no signature picture without a signatory');
+    r = await letters.handle('render', { id, client: 'northpeak', final: true, fields, signatoryId: 'sg-0000000000' }, hr);
+    assert.equal(r.status, 409, 'an unknown signatory is refused');
+
+    r = await letters.handle('signatory-save', { client: 'northpeak', name: 'Asha Rao', designation: 'HR Head', base64: png().toString('base64') }, hr);
+    assert.equal(r.status, 403, 'HR cannot add signatures');
+    r = await letters.handle('signatory-save', { client: 'northpeak', name: 'Asha Rao', designation: 'HR Head', base64: png().toString('base64') }, admin);
+    assert.equal(r.status, 200);
+    const sid = r.body.id;
+    r = await letters.handle('render', { id, client: 'northpeak', final: true, fields, signatoryId: sid, fileName: 'Offer_Letter_Ritika', candidate: { name: 'Ritika Sharma', mobile: '919810000000' } }, hr);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.fileName, 'Offer_Letter_Ritika.pdf');
+    const signedDocx = await calls[calls.length - 1].body.get('files').arrayBuffer();
+    assert.ok((await textOf(Buffer.from(signedDocx))).doc.includes('<w:drawing>'), 'approved letter is signed');
+    assert.ok(r.body.text.includes('Dear Ritika Sharma') && r.body.text.includes('Monthly CTC: 80,000'), 'the same letter as text, for the agent');
+
+    // Converter down: nothing is sent (never a Word file).
+    global.fetch = async () => ({ ok: false, status: 503 });
+    r = await letters.handle('render', { id, client: 'northpeak', final: true, fields, signatoryId: sid }, hr);
+    assert.equal(r.status, 502);
+    assert.equal(r.body.error, 'pdf_failed');
+  } finally { global.fetch = realFetch; for (const k of ['GOTENBERG_URL', 'GOTENBERG_USER', 'GOTENBERG_PASSWORD']) delete process.env[k]; }
   const log = await handlers.data({ method: 'GET', col: 'letterlog', user: admin });
   assert.equal(log.jsonBody.items.length, 2);
   const signedLog = log.jsonBody.items.find(i => i.data.signatory);
