@@ -57,6 +57,7 @@ window.__tcmpl={incomeTax,buildOffer,RULES};
 const DEFAULT={
   company:'Your Company Pvt. Ltd.', short:'Your Company', agentName:'Onboarding Assistant', initials:'YC',
   languages:'English, Hindi', tone:'Warm and professional', voice:'Plivo calling · Sarvam Indian-language voice',
+  grades:'JG01, JG02, JG03, JG04, JG05, JG06, JG07, JG08, JG09, JG10',
   offerMode:'both', autoStart:'Yes, immediately after offer release', approvals:'Single approver (hiring manager)',
   docs:'Signed offer letter; Aadhaar (masked); PAN; Bank proof; Last 3 payslips; Resignation acceptance or relieving letter; Education certificates; Passport photo; UAN (if any)',
   kycTool:'Client HRMS document vault', kycMode:'WhatsApp photo or secure upload link',
@@ -154,7 +155,7 @@ let client=CLIENTS[1];
 const cv=k=>{ const o=client.ov; if(k==='cadence') return Object.assign({},DEFAULT.cadence,o.cadence||{}); if(k==='docs'&&o.docList) return o.docList.filter(d=>!d.off&&d.text).map(d=>d.text).join('; '); if((o.hidden||[]).includes(k)) return ''; return o[k]!==undefined?o[k]:DEFAULT[k]; };
 
 /* ---------- Tabs ---------- */
-function showTab(t){ $$('nav.tabs button').forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===t)); $$('section.tab').forEach(s=>s.hidden=s.id!=='tab-'+t); if(t==='hr')renderHR(); if(t==='ready')renderReady(); if(t==='config'){renderConfig();renderLib();} if(t==='letters') renderLib(); if(t==='forms'){ renderForms(); updateExportLabel(); } }
+function showTab(t){ $$('nav.tabs button').forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===t)); $$('section.tab').forEach(s=>s.hidden=s.id!=='tab-'+t); if(t==='hr')renderHR(); if(t==='ready')renderReady(); if(t==='config'){renderConfig();renderLib();} if(t==='letters') renderLib(); if(t==='offer'&&typeof fillGrades==='function') fillGrades(); if(t==='forms'){ renderForms(); updateExportLabel(); } }
 $$('nav.tabs button').forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.tab)));
 
 /* ---------- Shared library, saving, currency, font size, files ---------- */
@@ -354,7 +355,9 @@ const OFFER_DATE=new Date(2026,10,2);
 Object.keys(RULES.pt).forEach(s=>{const o=document.createElement('option');o.textContent=s;$('#oState').append(o);});
 const CITY={Haryana:'Gurugram',Delhi:'New Delhi','Uttar Pradesh':'Noida',Rajasthan:'Jaipur',Karnataka:'Bengaluru',Maharashtra:'Mumbai','Tamil Nadu':'Chennai',Telangana:'Hyderabad','West Bengal':'Kolkata',Gujarat:'Ahmedabad'};
 let salMode='tc', manRows=[], anchor={k:'AC',v:960000}, lastOffer=null, tplSel='std-offer';
-function fillOffer(){ const c=DEMO_CAND[client.id]; $('#oName').value=c.name; $('#oMobile').value=c.mobile; $('#oEmail').value=c.email; $('#oRole').value=c.role; $('#oDept').value=team().dept; $('#oGrade').value=c.grade; $('#oState').value=c.state; $('#oMgr').value=c.mgr; $('#oDoj').value='2026-12-01'; if($('#oDob')) $('#oDob').value='1996-05-14'; $('#oIsMgr').checked=false;
+// Job grades come from Client setup -> Offer -> Job grades (comma separated). A grade already chosen stays even if removed from the list.
+function fillGrades(keep){ const sel=$('#oGrade'); if(!sel) return; const cur=keep!==undefined?keep:sel.value; const list=String(cv('grades')||'').split(/[,;\n]/).map(x=>x.trim()).filter(Boolean); if(cur&&!list.includes(cur)) list.push(cur); sel.innerHTML=list.map(g=>`<option>${esc(g)}</option>`).join(''); if(cur) sel.value=cur; }
+function fillOffer(){ const c=DEMO_CAND[client.id]; fillGrades(c.grade); $('#oName').value=c.name; $('#oMobile').value=c.mobile; $('#oEmail').value=c.email; $('#oRole').value=c.role; $('#oDept').value=team().dept; $('#oGrade').value=c.grade; $('#oState').value=c.state; $('#oMgr').value=c.mgr; $('#oDoj').value='2026-12-01'; if($('#oDob')) $('#oDob').value='1996-05-14'; $('#oIsMgr').checked=false;
   refreshStructSel(c.struct); applyStructDefaults(); anchor={k:'AC',v:c.ctc}; refreshTplSel('std-offer');
   tcDefaults(Math.round((c.ctc||0)/12)); setSalMode('tc'); }
 function refreshStructSel(keep){ const sel=$('#oStruct'); const v=keep||sel.value; sel.innerHTML=allStructs().map(s=>`<option value="${esc(s.id)}">${esc(s.name)}${s.builtin?'':' (saved)'}</option>`).join(''); if(allStructs().some(s=>s.id===v)) sel.value=v; }
@@ -988,7 +991,7 @@ function formsChat(i){ const forms=formDefs().filter(f=>f.applies); if(i>=forms.
 /* ---------- Config: sections, hide/restore, add/delete, saved per client ---------- */
 const SECTIONS=[
   {id:'identity',title:'Agent identity',fixed:true,keys:[['agentName','Agent name shown on WhatsApp'],['languages','Languages'],['tone','Tone'],['voice','Voice calling']]},
-  {id:'offer',title:'Offer',fixed:true,keys:[['offerMode','Offer source','sel',[['both','Offer desk and upload both on'],['make','Offer desk in Client Hub'],['upload','Upload from another tool']]],['autoStart','Start engagement'],['approvals','Approvals']]},
+  {id:'offer',title:'Offer',fixed:true,keys:[['offerMode','Offer source','sel',[['both','Offer desk and upload both on'],['make','Offer desk in Client Hub'],['upload','Upload from another tool']]],['autoStart','Start engagement'],['approvals','Approvals'],['grades','Job grades (comma separated, shown in the Offer desk)']]},
   {id:'day1',title:'Day-1 details',note:'Sent in the Day-1 kit and used to answer questions. Paste the location\'s Google Maps share link for the map card.',keys:[['address','Joining location'],['mapLink','Google Maps link'],['reportTime','Reporting time'],['meet','Who to meet'],['dress','Dress code'],['bring','What to bring'],['parking','Parking'],['canteen','Canteen']]},
   {id:'docs',title:'Documents',docs:true,note:'The checklist the agent sends and chases. Hide a standard document or add the client\'s own.',keys:[['kycMode','How documents are collected'],['kycTool','Where documents are filed']]},
   {id:'policy',title:'Policies the agent may explain',keys:[['salaryDate','Salary credit date'],['probation','Probation'],['leave','Leave'],['buddy','Buddy']]},
