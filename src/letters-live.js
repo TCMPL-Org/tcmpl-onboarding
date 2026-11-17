@@ -36,7 +36,7 @@ const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.doc
 const SOURCES = [
   ['Candidate', [['cand.name', 'Full name'], ['cand.first', 'First name'], ['cand.role', 'Designation'], ['cand.dept', 'Department'], ['cand.grade', 'Grade'], ['cand.doj', 'Joining date'], ['cand.dob', 'Date of birth'], ['cand.mgr', 'Reporting manager'], ['cand.email', 'Email'], ['cand.mobile', 'Mobile'], ['cand.state', 'Work state'], ['cand.city', 'Work city']]],
   ['Offer and salary', [['offer.date', 'Letter date (day it is made)'], ['offer.ctc', 'Annual CTC'], ['offer.ctcMonthly', 'Monthly CTC'], ['offer.ctcWords', 'Annual CTC in words'], ['offer.gross', 'Annual gross'], ['offer.grossMonthly', 'Monthly gross'], ['offer.takeHome', 'Monthly take-home']]],
-  ['Client setup', [['client.company', 'Company name'], ['client.short', 'Short company name'], ['client.address', 'Company address'], ['client.location', 'Place of posting'], ['client.probation', 'Probation period'], ['client.noticeProbation', 'Notice during probation'], ['client.noticeConfirmed', 'Notice after confirmation'], ['client.workWeek', 'Work week'], ['client.holidays', 'Holidays a year'], ['client.retirementAge', 'Retirement age'], ['client.jurisdiction', 'Courts with jurisdiction']]],
+  ['Client setup', [['client.company', 'Company name'], ['client.short', 'Short company name'], ['client.address', 'Company address (full)'], ['client.street', 'Company address (without city, state, PIN)'], ['client.city', 'Company city'], ['client.state', 'Company state'], ['client.pincode', 'Company PIN code'], ['client.location', 'Place of posting'], ['client.probation', 'Probation period'], ['client.noticeProbation', 'Notice during probation'], ['client.noticeConfirmed', 'Notice after confirmation'], ['client.workWeek', 'Work week'], ['client.holidays', 'Holidays a year'], ['client.retirementAge', 'Retirement age'], ['client.jurisdiction', 'Courts with jurisdiction']]],
   ['Signatory', [['sig.name', 'Signatory name'], ['sig.designation', 'Signatory designation']]],
   ['Other', [['fixed', 'Same text on every letter (type it here)'], ['ask', 'HR types it on each offer'], ['blank', 'Leave empty']]]
 ];
@@ -51,14 +51,18 @@ const AUTO = [
   [/^(CANDIDATE_|PERSONAL_)?E_?MAIL$/, 'cand.email'], [/^(CANDIDATE_)?(MOBILE|PHONE)/, 'cand.mobile'],
   [/^(CURRENT|LETTER|OFFER|ISSUE)_DATE$|^TODAY$|^DATE$/, 'offer.date'], [/CTC.*WORDS/, 'offer.ctcWords'], [/MONTHLY_CTC|CTC_MONTHLY/, 'offer.ctcMonthly'],
   [/^(ANNUAL_|TOTAL_|YEARLY_)?CTC$/, 'offer.ctc'], [/MONTHLY_GROSS|GROSS_MONTHLY/, 'offer.grossMonthly'], [/^(ANNUAL_)?GROSS(_SALARY)?$/, 'offer.gross'], [/TAKE_?HOME|NET_SALARY/, 'offer.takeHome'],
-  [/^COMPANY(_NAME)?$|^ORGANI[SZ]ATION(_NAME)?$|^EMPLOYER(_NAME)?$/, 'client.company'], [/^COMPANY_SHORT/, 'client.short'], [/COMPANY_ADDRESS|REGISTERED_ADDRESS|REGD_/, 'client.address'],
+  [/^COMPANY(_NAME)?$|^ORGANI[SZ]ATION(_NAME)?$|^EMPLOYER(_NAME)?$/, 'client.company'], [/^COMPANY_SHORT/, 'client.short'],
+  [/^COMPANY_CITY$/, 'client.city'], [/^COMPANY_STATE$/, 'client.state'], [/^COMPANY_(PIN|PINCODE|PIN_CODE|ZIP)$/, 'client.pincode'], [/COMPANY_ADDRESS|REGISTERED_ADDRESS|REGD_/, 'client.address'],
   [/^BRANCH|PLACE_OF_POSTING|WORK_LOCATION|^LOCATION$/, 'client.location'], [/NOTICE.*PROBATION/, 'client.noticeProbation'], [/NOTICE.*CONFIRM|^NOTICE_PERIOD$/, 'client.noticeConfirmed'],
   [/CONFIRMATION_PERIOD|PROBATION/, 'client.probation'], [/^CANDIDATE_|^EMPLOYEE_/, 'ask'], [/^COMPANY_/, 'fixed']
 ];
 const pretty = n => String(n).replace(/^Image:/i, '').toLowerCase().replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase());
-function autoMap(name) {
+// names: every placeholder in the template. When the letter also has COMPANY_CITY / STATE / PIN, its address
+// placeholder gets only the street part, so the address is not printed twice (HROne footers do this).
+function autoMap(name, names) {
   const hit = AUTO.find(([re]) => re.test(name));
-  const src = hit ? hit[1] : 'ask';
+  let src = hit ? hit[1] : 'ask';
+  if (src === 'client.address' && (names || []).some(n => /^COMPANY_(CITY|STATE|PIN)/.test(n))) src = 'client.street';
   return { src, value: '', label: src === 'ask' ? pretty(name) : '' };
 }
 
@@ -106,24 +110,41 @@ let tpls = [], sigs = [], status = { graph: false, storage: false, admin: false 
 const asks = {}; // template id -> { FIELD: value } typed on the Offer desk
 const tplById = id => tpls.find(t => t.id === id);
 const scanOf = t => { const d = t && t.data; const v = d && (d.versions || []).find(x => x.v === d.current); return (v && v.scan) || { fields: [], regions: [], images: [] }; };
-const mapOf = t => { const m = Object.assign({}, (t.data && t.data.map) || {}); for (const f of scanOf(t).fields) if (!m[f.name]) m[f.name] = autoMap(f.name); return m; };
+const mapOf = t => { const m = Object.assign({}, (t.data && t.data.map) || {}); const names = scanOf(t).fields.map(f => f.name); for (const n of names) if (!m[n]) m[n] = autoMap(n, names); return m; };
 const tablesOf = t => { const out = {}; for (const r of scanOf(t).regions) out[r.name] = (t.data.tables || {})[r.name] || defaultTable(r.name, r.fields); return out; };
 const imagesOf = t => { const out = {}; for (const k of scanOf(t).images) out[k] = (t.data.images || {})[k] || { src: /SIGN/i.test(k) ? 'signature' : 'blank' }; return out; };
 const sigsFor = cid => sigs.filter(s => s.data.client === '*' || s.data.client === cid);
 const usesSignature = t => Object.values(imagesOf(t)).some(m => m.src === 'signature') || Object.values(mapOf(t)).some(m => /^sig\./.test(m.src));
 
+// "Tower B, Sector 44, Gurugram, Haryana 122003" -> street, city, state, PIN (from Client setup → Offer letter details).
+const STATES = ['Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi', 'NCT of Delhi', 'Jammu and Kashmir', 'Ladakh', 'Puducherry', 'Chandigarh', 'Andaman and Nicobar Islands', 'Dadra and Nagar Haveli and Daman and Diu', 'Lakshadweep'];
+function addressParts(a, fallbackCity) {
+  const s = String(a || '').trim();
+  const pin = (s.match(/\b\d{3}\s?\d{3}\b/) || [''])[0].replace(/\s/, '');
+  const state = STATES.slice().sort((x, y) => y.length - x.length).find(st => new RegExp('\\b' + st.replace(/ /g, '\\s+') + '\\b', 'i').test(s)) || '';
+  let rest = s.replace(/\b\d{3}\s?\d{3}\b/, '');
+  if (state) rest = rest.replace(new RegExp('\\b' + state.replace(/ /g, '\\s+') + '\\b', 'i'), '');
+  const parts = rest.split(',').map(x => x.trim()).filter(Boolean);
+  const city = parts.length > 1 ? parts.pop() : (fallbackCity || '');
+  return { street: parts.join(', '), city: city || fallbackCity || '', state, pin };
+}
+
 function valuesFor(t, data, sig) {
   const m = mapOf(t), fmt = t.data.dateFmt || 'd MMMM yyyy', fields = {};
   const c = data.c, cv = data.cv;
+  const addr = addressParts(cv('companyAddress'), cv('location'));
+  // Without a signatory record, the signatory text in Client setup ("Priya Malhotra, HR Business Partner") is used.
+  const sigText = String(cv('signatory') || '');
+  const signer = sig || { name: sigText.split(',')[0].trim(), designation: sigText.split(',').slice(1).join(',').trim() };
   for (const f of scanOf(t).fields) {
     const x = m[f.name] || autoMap(f.name);
     const [grp, key] = x.src.split('.');
     let v;
     if (grp === 'cand') v = key === 'doj' || key === 'dob' ? (c[key] ? fmtDate(c[key], fmt) : '') : c[key];
     else if (grp === 'offer') v = { date: fmtDate(new Date(), fmt), ctc: money(data.ctc), ctcMonthly: money(data.ctc / 12), ctcWords: inWords(data.ctc), gross: money(data.gross), grossMonthly: money(data.gross / 12), takeHome: money(data.takeHome) }[key];
-    else if (grp === 'client') v = key === 'location' ? (cv('location') || c.city || c.state) : cv(CLIENT_KEY[key] || key);
+    else if (grp === 'client') v = key === 'location' ? (cv('location') || c.city || c.state) : key === 'street' ? addr.street : key === 'city' ? addr.city : key === 'state' ? addr.state : key === 'pincode' ? addr.pin : cv(CLIENT_KEY[key] || key);
     else if (grp === 'custom') { const it = (data.customLetter || []).find(z => z.slug === key); v = it ? it.value : ''; }
-    else if (grp === 'sig') v = sig ? (key === 'name' ? sig.name : sig.designation) : undefined;
+    else if (grp === 'sig') v = key === 'name' ? signer.name : signer.designation;
     else if (grp === 'fixed') v = x.value;
     else if (grp === 'blank') v = '';
     else if (grp === 'ask') v = (asks[t.id] || {})[f.name];
@@ -335,7 +356,10 @@ function panel(t) {
   if (!sigPick[t.id] || !ss.some(s => s.id === sigPick[t.id])) sigPick[t.id] = (ss.find(s => s.data.hasImage) || ss[0] || {}).id || '';
   const a = asks[t.id] = asks[t.id] || {};
   const focus = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.dxask : null;
-  p.innerHTML = `${usesSignature(t) ? `<div class="field"><label class="lbl" for="dxSig">Signed by</label><select id="dxSig">${ss.length ? ss.map(s => `<option value="${esc(s.id)}" ${s.id === sigPick[t.id] ? 'selected' : ''}>${esc(s.data.name)}${s.data.designation ? ', ' + esc(s.data.designation) : ''}${s.data.hasImage ? '' : ' (no signature image)'}</option>`).join('') : '<option value="">No signatory set up (Offer letters)</option>'}</select></div>` : ''}
+  const data = window.tcmplOfferData && window.tcmplOfferData();
+  const sigText = data ? String(data.cv('signatory') || '') : '';
+  p.innerHTML = `${usesSignature(t) ? (ss.length ? `<div class="field"><label class="lbl" for="dxSig">Signed by</label><select id="dxSig">${ss.map(s => `<option value="${esc(s.id)}" ${s.id === sigPick[t.id] ? 'selected' : ''}>${esc(s.data.name)}${s.data.designation ? ', ' + esc(s.data.designation) : ''}${s.data.hasImage ? '' : ' (no signature image)'}</option>`).join('')}</select></div>`
+    : `<div class="note"><b>Signed by:</b> ${esc(sigText || 'the signatory in Client setup → Offer letter details')}. <span class="chip warn">No signature picture yet</span> The letter goes without one until an admin adds a signatory with a signature image in Offer letters → Signatories.</div>`) : ''}
     ${askF.length ? `<div class="dx-asks">${askF.map(f => `<div class="field"><label class="lbl" for="dxa_${esc(f.name)}">${esc((m[f.name] && m[f.name].label) || pretty(f.name))}</label><input type="text" id="dxa_${esc(f.name)}" data-dxask="${esc(f.name)}" value="${esc(a[f.name] || '')}"></div>`).join('')}</div>` : ''}
     <div class="note" id="dxState"></div>`;
   const sel = $('#dxSig'); if (sel) sel.onchange = () => { sigPick[t.id] = sel.value; schedule(); };

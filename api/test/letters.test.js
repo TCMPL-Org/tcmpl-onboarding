@@ -131,8 +131,10 @@ test('letters API: admin uploads and sets up; HR previews; final letter needs ev
   r = await letters.handle('render', { id, client: 'northpeak', final: true, fields: { COMPANY: 'Northpeak' } }, hr);
   assert.equal(r.status, 409);
   r = await letters.handle('render', { id, client: 'northpeak', final: true, fields }, hr);
-  assert.equal(r.status, 409);
-  assert.equal(r.body.error, 'signatory_required');
+  assert.equal(r.status, 200, 'no signatory set up yet: the letter still goes, without the signature picture');
+  assert.ok(!(await textOf(Buffer.from(r.body.base64, 'base64'))).doc.includes('<w:drawing>'));
+  r = await letters.handle('render', { id, client: 'northpeak', final: true, fields, signatoryId: 'sg-0000000000' }, hr);
+  assert.equal(r.status, 409, 'an unknown signatory is refused');
 
   r = await letters.handle('signatory-save', { client: 'northpeak', name: 'Asha Rao', designation: 'HR Head', base64: png().toString('base64') }, hr);
   assert.equal(r.status, 403, 'HR cannot add signatures');
@@ -146,9 +148,10 @@ test('letters API: admin uploads and sets up; HR previews; final letter needs ev
   assert.match(r.body.note, /Microsoft 365/);
   assert.ok((await textOf(Buffer.from(r.body.base64, 'base64'))).doc.includes('<w:drawing>'), 'approved letter is signed');
   const log = await handlers.data({ method: 'GET', col: 'letterlog', user: admin });
-  assert.equal(log.jsonBody.items.length, 1);
-  assert.equal(log.jsonBody.items[0].data.by, 'priya@client.com');
-  assert.equal(log.jsonBody.items[0].data.mobile, '••••••••0000');
+  assert.equal(log.jsonBody.items.length, 2);
+  const signedLog = log.jsonBody.items.find(i => i.data.signatory);
+  assert.equal(signedLog.data.by, 'priya@client.com');
+  assert.equal(signedLog.data.mobile, '••••••••0000');
   assert.equal((await handlers.data({ method: 'GET', col: 'letterlog', user: hr })).status, 403);
 
   // A new version keeps the set-up.

@@ -235,7 +235,9 @@ async function render(store, p, user) {
     imageNotes[k] = 'signature added on approval';
     if (!final) continue;
     const sid = okId(p.signatoryId) ? p.signatoryId : '';
-    const s = sid ? await store.get('signatories', sid) : null;
+    // No signatory chosen (none set up for this client yet): the letter goes without the signature picture.
+    if (!sid) { images[k] = null; continue; }
+    const s = await store.get('signatories', sid);
     if (!s || !canSee(user, s.data.client) || (s.data.client !== '*' && d.client !== '*' && s.data.client !== d.client && s.data.client !== p.client)) return res(409, { error: 'signatory_required', detail: 'Choose who signs this letter.' });
     const img = s.data.hasImage ? await getFile(store, `sig/${sid}`) : null;
     if (!img) return res(409, { error: 'signature_missing', detail: `No signature image for ${s.data.name}. An admin can add it in Offer letters.` });
