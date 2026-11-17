@@ -136,7 +136,8 @@ function mount() {
   $('#jlForm').onsubmit = sendOwn;
   setInterval(() => { if (!sec.hidden && !demoOn() && document.visibilityState === 'visible') loadMsgs(false); }, POLL_MS);
   document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab === 'journey' && !demoOn()) reload(selected); }));
-  const cs = $('#clientSel'); if (cs) cs.addEventListener('change', () => setTimeout(() => { if (!demoOn()) reload(selected); }, 60));
+  // Another client chosen: show that client's candidates (the one open before belongs to the old client).
+  const cs = $('#clientSel'); if (cs) cs.addEventListener('change', () => { selected = null; sel = null; preview = null; setTimeout(() => { if (!demoOn()) reload(null); }, 60); });
   applyMode();
   return true;
 }
@@ -161,7 +162,9 @@ function applyMode() {
 }
 
 /* ---------- data ---------- */
-async function reload(want, stepId) {
+// opts.open: HR opened this candidate from another screen (e.g. HR view, all clients): switch to their client first.
+// Every other reload stays on the chosen client.
+async function reload(want, stepId, opts = {}) {
   if (stepId) { sel = stepId; preview = null; }
   const u = U(); if (!u) return;
   health = (await u.loadHealth()) || {};
@@ -173,7 +176,7 @@ async function reload(want, stepId) {
   // Opening a candidate of another client (e.g. from HR view, all clients) switches the client first.
   const w = want && all.find(c => c.id === want);
   const wc = w && w.profile && w.profile.client;
-  if (wc && window.tcmplOfClient && !window.tcmplOfClient(w) && $('#clientSel') && [...$('#clientSel').options].some(o => o.value === wc)) {
+  if (opts.open && wc && window.tcmplOfClient && !window.tcmplOfClient(w) && $('#clientSel') && [...$('#clientSel').options].some(o => o.value === wc)) {
     $('#clientSel').value = wc; $('#clientSel').dispatchEvent(new Event('change'));
     const jb = document.querySelector('nav.tabs button[data-tab="journey"]'); if (jb) jb.setAttribute('aria-selected', 'true');
     document.querySelectorAll('section.tab').forEach(s => { s.hidden = s.id !== 'tab-journey'; });
@@ -1068,7 +1071,7 @@ async function summary(c, allDocs) {
   } finally { [plan, readyTpl, docs, steps] = keep; }
 }
 
-window.tcmplLive = { forgetSetup(client) { delete ckSetups[client]; }, reload, summary, open(id, stepId) { const b = document.querySelector('nav.tabs button[data-tab="journey"]'); if (b) b.click(); setTimeout(() => reload(id, stepId), 50); } };
+window.tcmplLive = { forgetSetup(client) { delete ckSetups[client]; }, reload: (id, stepId) => reload(id, stepId, { open: true }), summary, open(id, stepId) { const b = document.querySelector('nav.tabs button[data-tab="journey"]'); if (b) b.click(); setTimeout(() => reload(id, stepId, { open: true }), 50); } };
 
 (function waitForApp(n) {
   if (window.tcmplWAUtil && mount()) return;

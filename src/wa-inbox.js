@@ -211,6 +211,7 @@ function mount() {
   nav.querySelectorAll('button').forEach(b => { if (b !== btn) b.addEventListener('click', () => { btn.setAttribute('aria-selected', 'false'); sec.hidden = true; }); });
 
   $('#waRefresh').onclick = () => refresh(true);
+  const cs = $('#clientSel'); if (cs) cs.addEventListener('change', () => { selected = null; lastSig = ''; setTimeout(() => { if (!sec.hidden) refresh(true); }, 60); });
   $('#waOpenJ').onclick = () => {
     if (!selected) { toast('Select a candidate first.'); return; }
     const b = document.querySelector('nav.tabs button[data-tab="journey"]'); if (b) b.click();
@@ -267,8 +268,11 @@ async function refresh(force) {
   if (!h.db) return;
   const c = await getJson('/api/data/candidates').catch(() => ({}));
   if (!c.ok) return;
-  const cands = (c.body.items || []).map(i => Object.assign({ id: i.id }, i.data)).sort((a, b) => String(b.lastMessageAt).localeCompare(String(a.lastMessageAt)));
-  if (!selected && cands.length) selected = cands[0].id;
+  // Only the chosen client's candidates (numbers with no offer yet show under every client so they are not missed).
+  const cands = (c.body.items || []).map(i => Object.assign({ id: i.id }, i.data))
+    .filter(x => !window.tcmplOfClient || !(x.profile && x.profile.client) || window.tcmplOfClient(x))
+    .sort((a, b) => String(b.lastMessageAt).localeCompare(String(a.lastMessageAt)));
+  if (!cands.some(x => x.id === selected)) selected = cands.length ? cands[0].id : null;
   // Only the open conversation's messages are loaded.
   const m = selected ? await getJson('/api/data/messages?candidateId=' + encodeURIComponent(selected)).catch(() => ({})) : { ok: true, body: { items: [] } };
   if (!m.ok) return;
