@@ -1012,7 +1012,7 @@ async function sendPreview(s) {
     const it = { type: 'letter' };
     const cur = window.tcmplCurrent && window.tcmplCurrent();
     const pdf = window.tcmplLetterPdf && window.tcmplLetterPdf();
-    if (cur && U().candId(cur.mobile) === c.id && pdf && pdf.blob instanceof Blob) { it.pdfBase64 = await U().blobToBase64(pdf.blob); it.filename = pdf.name; it.protected = !!pdf.protected; }
+    if (cur && U().candId(cur.mobile) === c.id && pdf && pdf.blob instanceof Blob) { it.pdfBase64 = await U().blobToBase64(pdf.blob); it.filename = pdf.name; it.protected = !!pdf.protected; it.text = pdf.text || ''; }
     items.push(it);
   }
   if (text) {

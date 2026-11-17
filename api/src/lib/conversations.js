@@ -119,7 +119,8 @@ async function startForOffer(p, user) {
     cand.letterSent = false;
     cand.letterMediaId = '';
     cand.hasLetter = true;
-    await store.put('letters', candidateId, { pdfBase64: pdf, filename: cand.letterFile }, user);
+    // text: the full text of the same letter, for the agent to read when the candidate asks about their offer.
+    await store.put('letters', candidateId, { pdfBase64: pdf, filename: cand.letterFile, text: str(p.letterText, 60000) }, user);
     if (wa.waConfigured()) {
       try { cand.letterMediaId = await wa.uploadMedia(Buffer.from(pdf, 'base64'), letterMime(cand.letterFile), cand.letterFile); cand.letterUploadedAt = new Date().toISOString(); }
       catch (e) { cand.letterError = e.message; }
@@ -197,7 +198,7 @@ async function handleInboundCore(m) {
   } else if (m.type !== 'text' && !m.text) {
     out = { source: 'system', reply: "Thanks, I've received it. The hiring team will review it.", handover: false, riskSignals: [] };
   } else {
-    out = await agent.reply(await withLatestFacts(store, cand), await history(store, candidateId), text);
+    out = await agent.reply(await withLatestFacts(store, cand), await history(store, candidateId), text, { letter: await letterTextFor(store, candidateId) });
   }
 
   let waId = '', error = '';
@@ -315,7 +316,7 @@ async function pushItems(p, user) {
       if (typeof lt0.pdfBase64 === 'string' && lt0.pdfBase64.length > 100 && lt0.pdfBase64.length < MAX_PDF_B64) {
         cand.letterFile = str(lt0.filename, 150) || cand.letterFile || 'Offer_Letter.pdf';
         cand.letterProtected = Boolean(lt0.protected);
-        await store.put('letters', candidateId, { pdfBase64: lt0.pdfBase64, filename: cand.letterFile }, user);
+        await store.put('letters', candidateId, { pdfBase64: lt0.pdfBase64, filename: cand.letterFile, text: str(lt0.text, 60000) }, user);
         cand.letterMediaId = ''; cand.letterUploadedAt = ''; cand.hasLetter = true;
       }
       const mid = await letterMedia(store, candidateId, cand);
@@ -336,7 +337,7 @@ async function pushItems(p, user) {
         if (typeof it.pdfBase64 === 'string' && it.pdfBase64.length > 100 && it.pdfBase64.length < MAX_PDF_B64) {
           cand.letterFile = str(it.filename, 150) || cand.letterFile || 'Offer_Letter.pdf';
           cand.letterProtected = Boolean(it.protected);
-          await store.put('letters', candidateId, { pdfBase64: it.pdfBase64, filename: cand.letterFile }, user);
+          await store.put('letters', candidateId, { pdfBase64: it.pdfBase64, filename: cand.letterFile, text: str(it.text, 60000) }, user);
           cand.letterMediaId = ''; cand.letterUploadedAt = ''; cand.hasLetter = true;
         }
         const mid = await letterMedia(store, candidateId, cand);
@@ -465,6 +466,23 @@ async function missingDetails(p) {
   const cand = await loadCand(store, str(p && p.candidateId, 40));
   if (!cand) return { status: 404, body: { error: 'candidate_not_found' } };
   return { status: 200, body: { missing: profile.missingByForm(cand), inProgress: Boolean(cand.details && cand.details.step) } };
+}
+
+// The full text of this candidate's own offer letter, for the agent. Saved at release; a Word letter saved
+// before that (no text yet) is read once from the file and kept. A PDF from elsewhere without text: '' (HR answers).
+async function letterTextFor(store, candidateId) {
+  const rec = await store.get('letters', candidateId).catch(() => null);
+  const d = rec && rec.data;
+  if (!d) return '';
+  if (d.text) return String(d.text);
+  if (d.pdfBase64 && /\.docx$/i.test(d.filename || '')) {
+    try {
+      const text = (await require('./docx-merge').toText(Buffer.from(d.pdfBase64, 'base64'))).slice(0, 60000);
+      if (text) await store.put('letters', candidateId, Object.assign({}, d, { text }), SYSTEM).catch(() => {});
+      return text;
+    } catch { return ''; }
+  }
+  return '';
 }
 
 // The agent always answers with the client's latest facts (saved from Client setup); the candidate's own

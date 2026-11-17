@@ -264,7 +264,9 @@ async function render(store, p, user) {
     template: p.id, templateName: d.name, version: v, client: str(p.client, 60) || d.client, candidate: str(p.candidate && p.candidate.name, 120),
     mobile: (d => '•'.repeat(Math.max(0, d.length - 4)) + d.slice(-4))(str(p.candidate && p.candidate.mobile, 20).replace(/\D/g, '')), signatory: signer, by: user.email || user.name || '', at, pdf: isPdf, protected: locked
   }, user).catch(e => console.error('letterlog', e && e.message));
-  return res(200, { base64: file.toString('base64'), mime, fileName: `${base}.${ext}`, pdf: isPdf, protected: locked, note });
+  // text: the same letter as plain text (clause numbers and salary tables included), kept for the onboarding agent.
+  const text = await merge.toText(out.buffer).catch(() => '');
+  return res(200, { base64: file.toString('base64'), mime, fileName: `${base}.${ext}`, pdf: isPdf, protected: locked, note, text: text.slice(0, 60000) });
 }
 
 async function handle(action, p, user) {

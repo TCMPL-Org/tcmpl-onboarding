@@ -4,7 +4,7 @@
 // path after the host is ignored), AZURE_OPENAI_API_KEY, AZURE_OPENAI_DEPLOYMENT
 // (the deployment name you chose), optional AZURE_OPENAI_API_VERSION.
 
-const MAX_PROMPT = 24000;
+const MAX_PROMPT = 70000; // room for the candidate's full offer letter (up to 40,000 characters)
 
 function aiConfigured() {
   return Boolean(process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_DEPLOYMENT);

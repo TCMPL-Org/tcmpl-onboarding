@@ -463,4 +463,114 @@ async function fill(buffer, opts = {}) {
   return { buffer: out, missing: [...missing] };
 }
 
-module.exports = { scan, fill, mergeName, imageSize };
+
+/* ---------- the letter as plain text (for the onboarding agent to read) ---------- */
+// Paragraphs in order, tables as "cell | cell" rows, Word's automatic list numbers (1.1, 7.9.1, a.) included,
+// then the header and footer text once.
+const ROMAN = n => { let r = ''; for (const [v, s] of [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']]) while (n >= v) { r += s; n -= v; } return r; };
+function fmtNum(n, f) {
+  if (f === 'lowerLetter') return String.fromCharCode(96 + ((n - 1) % 26) + 1);
+  if (f === 'upperLetter') return String.fromCharCode(64 + ((n - 1) % 26) + 1);
+  if (f === 'lowerRoman') return ROMAN(n);
+  if (f === 'upperRoman') return ROMAN(n).toUpperCase();
+  if (f === 'bullet') return '•';
+  if (f === 'none') return '';
+  return String(n);
+}
+const attrW = (el, name) => (el ? (el.getAttributeNS(NS.w, name) || el.getAttribute('w:' + name) || '') : '');
+const firstW = (el, local) => (el ? childrenW(el, local)[0] || null : null);
+
+async function toText(buffer) {
+  const zip = await open(buffer);
+  const read = async n => (zip.file(n) ? parse(await zip.file(n).async('string')) : null);
+  const doc = await read('word/document.xml'), numbering = await read('word/numbering.xml'), styles = await read('word/styles.xml');
+  // numbering: numId -> { abs, overrides }, abs -> levels
+  const nums = {}, abstracts = {};
+  if (numbering) {
+    for (const a of [...numbering.getElementsByTagNameNS(NS.w, 'abstractNum')]) {
+      const lv = {};
+      for (const l of childrenW(a, 'lvl')) lv[attrW(l, 'ilvl')] = { start: +attrW(firstW(l, 'start'), 'val') || 1, fmt: attrW(firstW(l, 'numFmt'), 'val') || 'decimal', text: attrW(firstW(l, 'lvlText'), 'val') };
+      abstracts[attrW(a, 'abstractNumId')] = lv;
+    }
+    for (const n of [...numbering.getElementsByTagNameNS(NS.w, 'num')]) {
+      const starts = {};
+      for (const o of childrenW(n, 'lvlOverride')) { const so = firstW(o, 'startOverride'); if (so) starts[attrW(o, 'ilvl')] = +attrW(so, 'val'); }
+      nums[attrW(n, 'numId')] = { abs: attrW(firstW(n, 'abstractNumId'), 'val'), starts };
+    }
+  }
+  const styleNum = {};
+  if (styles) {
+    const by = {};
+    for (const st of [...styles.getElementsByTagNameNS(NS.w, 'style')]) by[attrW(st, 'styleId')] = st;
+    const find = (id, depth = 0) => {
+      const st = by[id]; if (!st || depth > 8) return null;
+      const np = firstW(firstW(st, 'pPr'), 'numPr');
+      if (np) return { numId: attrW(firstW(np, 'numId'), 'val'), ilvl: attrW(firstW(np, 'ilvl'), 'val') || '0' };
+      const b = firstW(st, 'basedOn'); return b ? find(attrW(b, 'val'), depth + 1) : null;
+    };
+    for (const id of Object.keys(by)) styleNum[id] = find(id);
+  }
+  const counters = {}; // abstract id -> [level counters]
+  const numberFor = p => {
+    const pPr = firstW(p, 'pPr');
+    let np = firstW(pPr, 'numPr'), numId = '', ilvl = '0';
+    if (np) { numId = attrW(firstW(np, 'numId'), 'val'); ilvl = attrW(firstW(np, 'ilvl'), 'val') || '0'; }
+    else { const s = styleNum[attrW(firstW(pPr, 'pStyle'), 'val')]; if (s) { numId = s.numId; ilvl = s.ilvl; } }
+    const n = nums[numId];
+    if (!n || numId === '0') return '';
+    const lv = abstracts[n.abs] || {}, L = +ilvl;
+    const c = counters[n.abs] = counters[n.abs] || [];
+    if (!n.seen) { n.seen = true; for (const [k, v] of Object.entries(n.starts)) c[+k] = v - 1; }
+    c[L] = (c[L] === undefined ? ((lv[L] && lv[L].start) || 1) - 1 : c[L]) + 1;
+    for (let k = L + 1; k < 10; k++) c[k] = undefined;
+    const def = lv[L]; if (!def) return '';
+    return def.text.replace(/%(\d)/g, (x, d) => { const k = +d - 1; const v = c[k] === undefined ? ((lv[k] && lv[k].start) || 1) : c[k]; return fmtNum(v, (lv[k] || def).fmt); }).trim();
+  };
+  const runText = p => {
+    let s = '';
+    const walk = n => {
+      for (let c = n.firstChild; c; c = c.nextSibling) {
+        if (c.nodeType !== 1) continue;
+        if (isW(c, 't')) s += textOf(c);
+        else if (isW(c, 'tab')) s += ' ';
+        else if (isW(c, 'br') || isW(c, 'cr')) s += '\n';
+        else if (isW(c, 'instrText') || isW(c, 'delText') || isW(c, 'pPr') || isW(c, 'rPr')) continue;
+        else if (isW(c, 'p')) continue; // text boxes are read separately
+        else walk(c);
+      }
+    };
+    walk(p);
+    return s.replace(/[ \u00a0]+/g, ' ').trim();
+  };
+  const lines = [];
+  const block = el => {
+    for (let c = el.firstChild; c; c = c.nextSibling) {
+      if (c.nodeType !== 1) continue;
+      if (isW(c, 'p')) {
+        const t = runText(c), num = numberFor(c);
+        if (t) lines.push((num && num !== '•' ? num + ' ' : num === '•' ? '• ' : '') + t);
+        else if (lines.length && lines[lines.length - 1] !== '') lines.push('');
+        // text boxes inside the paragraph
+        for (const tb of [...c.getElementsByTagNameNS(NS.w, 'txbxContent')]) if (!ancestor(tb, 'txbxContent')) block(tb);
+      } else if (isW(c, 'tbl')) {
+        for (const tr of childrenW(c, 'tr')) {
+          const cells = childrenW(tr, 'tc').map(tc => { const sub = []; const keep = lines.length; block(tc); sub.push(...lines.splice(keep)); return sub.filter(Boolean).join(' / '); });
+          if (cells.some(Boolean)) lines.push(cells.join(' | '));
+        }
+        lines.push('');
+      } else if (isW(c, 'sdt')) { const ct = firstW(c, 'sdtContent'); if (ct) block(ct); }
+      else if (isW(c, 'body') || isW(c, 'hdr') || isW(c, 'ftr')) block(c);
+    }
+  };
+  block(firstW(doc.documentElement, 'body') || doc.documentElement);
+  const extra = [];
+  for (const n of Object.keys(zip.files).filter(x => /^word\/(header|footer)\d*\.xml$/.test(x)).sort()) {
+    const d = await read(n); const keep = lines.length; block(d.documentElement);
+    const t = lines.splice(keep).filter(Boolean).join('\n'); if (t && !extra.includes(t)) extra.push(t);
+  }
+  let out = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (extra.length) out += '\n\n[Header / footer]\n' + extra.join('\n');
+  return out;
+}
+
+module.exports = { scan, fill, toText, mergeName, imageSize };

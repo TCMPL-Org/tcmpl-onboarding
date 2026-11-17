@@ -149,6 +149,7 @@ test('letters API: admin uploads and sets up; HR previews; final letter needs ev
   assert.equal(r.body.fileName, 'Offer_Letter_Ritika.docx');
   assert.match(r.body.note, /Microsoft 365/);
   assert.ok((await textOf(Buffer.from(r.body.base64, 'base64'))).doc.includes('<w:drawing>'), 'approved letter is signed');
+  assert.ok(r.body.text.includes('Dear Ritika Sharma') && r.body.text.includes('Monthly CTC: 80,000'), 'the same letter as text, for the agent');
   const log = await handlers.data({ method: 'GET', col: 'letterlog', user: admin });
   assert.equal(log.jsonBody.items.length, 2);
   const signedLog = log.jsonBody.items.find(i => i.data.signatory);

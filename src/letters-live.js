@@ -432,7 +432,7 @@ async function finalLetter() {
   }
   if (r.body.note) toast(r.body.note);
   const s = sigs.find(x => x.id === body.signatoryId);
-  return { blob: b64Blob(r.body.base64, r.body.mime), fileName: r.body.fileName, protected: Boolean(r.body.protected), pdf: Boolean(r.body.pdf), signatory: s ? s.data.name : '' };
+  return { blob: b64Blob(r.body.base64, r.body.mime), fileName: r.body.fileName, protected: Boolean(r.body.protected), pdf: Boolean(r.body.pdf), signatory: s ? s.data.name : '', text: r.body.text || '' };
 }
 window.tcmplDocxFinal = finalLetter;
 

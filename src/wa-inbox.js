@@ -105,7 +105,7 @@ async function collectTouchpoint() {
       if (/offer_letter/i.test(nm)) {
         const pdf = window.tcmplLetterPdf && window.tcmplLetterPdf();
         const it = { type: 'letter', filename: nm };
-        if (pdf && pdf.blob instanceof Blob) it.pdfBase64 = await blobToBase64(pdf.blob);
+        if (pdf && pdf.blob instanceof Blob) { it.pdfBase64 = await blobToBase64(pdf.blob); it.text = pdf.text || ''; }
         items.push(it);
       } else skipped++;
       continue;
@@ -222,7 +222,7 @@ function mount() {
     const cur = window.tcmplCurrent && window.tcmplCurrent();
     const pdf = window.tcmplLetterPdf && window.tcmplLetterPdf();
     // Attach a freshly generated letter when the Offer desk has this candidate open.
-    if (cur && candId(cur.mobile) === selected && pdf && pdf.blob instanceof Blob) { item.pdfBase64 = await blobToBase64(pdf.blob); item.filename = pdf.name; }
+    if (cur && candId(cur.mobile) === selected && pdf && pdf.blob instanceof Blob) { item.pdfBase64 = await blobToBase64(pdf.blob); item.filename = pdf.name; item.text = pdf.text || ''; }
     const r = await push(selected, [item], 'Offer letter resent');
     if (r.ok) { toast('Offer letter sent on WhatsApp.'); refresh(true); } else toast(explain(r));
   };
