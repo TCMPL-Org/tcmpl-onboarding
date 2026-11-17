@@ -31,6 +31,7 @@ async function template() {
     p(t('Dear ') + fld('CANDIDATE_NAME') + t(', you join ') + fld('COMPANY') + t(' as ') + fld('DESIGNATION', '«DESIGNATION»') + t('.')),
     p(t('Monthly CTC: ') + '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>=</w:instrText></w:r>' + fld('CTC') + '<w:r><w:instrText>/12 \\# "#,##0"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>'),
     p(t('I, «CAN') + t('DIDATE_NAME», accept.')),
+    p(t('Retire at &lt;&lt;Retirement_Age&gt;&gt; years.')),
     table('GROSS', 'Gross', ['GROSS_COMPONENT_NAME', 'GROSS_COMPONENT_NATURE', 'GROSS_COMPONENT_AMOUNT', 'YEARLY_GROSS_COMPONENT_AMOUNT']),
     table('OTHER', 'Other', ['OTHER_COMPONENT_NAME', 'OTHER_COMPONENT_AMOUNT']),
     p(fld('Image:ACTION_USER_SIGNATURE')),
@@ -60,7 +61,7 @@ const textOf = async buf => {
 test('scan finds fields (split over runs and typed), repeating tables, pictures and footer fields', async () => {
   const s = await merge.scan(await template());
   const names = s.fields.map(f => f.name);
-  for (const n of ['CURRENT_DATE', 'CANDIDATE_NAME', 'COMPANY', 'DESIGNATION', 'CTC', 'ACTION_SIGNATORY_NAME', 'COMPANY_ADDRESS']) assert.ok(names.includes(n), n);
+  for (const n of ['CURRENT_DATE', 'CANDIDATE_NAME', 'COMPANY', 'DESIGNATION', 'CTC', 'ACTION_SIGNATORY_NAME', 'COMPANY_ADDRESS', 'Retirement_Age']) assert.ok(names.includes(n), n);
   assert.ok(!names.some(n => /^Table|COMPONENT/.test(n)), 'markers and table fields are not listed as single fields');
   assert.equal(s.fields.find(f => f.name === 'CANDIDATE_NAME').count, 2, 'one field and one typed «marker»');
   assert.deepEqual(s.fields.find(f => f.name === 'COMPANY_ADDRESS').parts, ['footer']);
@@ -70,7 +71,7 @@ test('scan finds fields (split over runs and typed), repeating tables, pictures 
 });
 
 test('fill: values, repeated rows, empty table removed, formula worked out, typed markers, picture, mail merge switched off', async () => {
-  const fields = { CURRENT_DATE: '16 November 2026', CANDIDATE_NAME: 'Ritika <Sharma> & Co', COMPANY: 'Northpeak', DESIGNATION: 'Senior Executive', CTC: '9,59,988', ACTION_SIGNATORY_NAME: 'Asha Rao', COMPANY_ADDRESS: 'Mumbai' };
+  const fields = { Retirement_Age: '58', CURRENT_DATE: '16 November 2026', CANDIDATE_NAME: 'Ritika <Sharma> & Co', COMPANY: 'Northpeak', DESIGNATION: 'Senior Executive', CTC: '9,59,988', ACTION_SIGNATORY_NAME: 'Asha Rao', COMPANY_ADDRESS: 'Mumbai' };
   const tables = { gross: [{ GROSS_COMPONENT_NAME: 'Basic', GROSS_COMPONENT_NATURE: 'Fixed', GROSS_COMPONENT_AMOUNT: '39,060', YEARLY_GROSS_COMPONENT_AMOUNT: '4,68,720' }, { GROSS_COMPONENT_NAME: 'HRA', GROSS_COMPONENT_NATURE: 'Fixed', GROSS_COMPONENT_AMOUNT: '19,530', YEARLY_GROSS_COMPONENT_AMOUNT: '2,34,360' }] };
   const r = await merge.fill(await template(), { fields, tables, images: { ACTION_USER_SIGNATURE: { data: png() } } });
   assert.deepEqual(r.missing, []);
@@ -78,6 +79,7 @@ test('fill: values, repeated rows, empty table removed, formula worked out, type
   assert.ok(plain.includes('Dear Ritika &lt;Sharma&gt; &amp; Co, you join Northpeak as Senior Executive.'), 'values are escaped and keep the text around them');
   assert.ok(plain.includes('Monthly CTC: 79,999'), 'formula =CTC/12 with #,##0');
   assert.ok(plain.includes('I, Ritika &lt;Sharma&gt; &amp; Co, accept.'), 'typed «marker» split over two runs');
+  assert.ok(plain.includes('Retire at 58 years.'), 'typed <<marker>>');
   assert.ok(plain.includes('Basic') && plain.includes('HRA') && plain.includes('2,34,360'));
   assert.ok(!plain.includes('OTHER'), 'a table with no rows is removed');
   assert.ok(!/MERGEFIELD|«|TableStart/.test(doc), 'no fields or markers left');
@@ -122,7 +124,7 @@ test('letters API: admin uploads and sets up; HR previews; final letter needs ev
   assert.equal(r.status, 403, 'stored files are never listed');
   assert.equal((await letters.handle('render', { id, fields: {} }, other)).status, 404);
 
-  const fields = { CURRENT_DATE: '16 November 2026', CANDIDATE_NAME: 'Ritika Sharma', COMPANY: 'Northpeak', DESIGNATION: 'Executive', CTC: '960000', ACTION_SIGNATORY_NAME: 'Asha Rao', COMPANY_ADDRESS: 'Mumbai' };
+  const fields = { Retirement_Age: '58', CURRENT_DATE: '16 November 2026', CANDIDATE_NAME: 'Ritika Sharma', COMPANY: 'Northpeak', DESIGNATION: 'Executive', CTC: '960000', ACTION_SIGNATORY_NAME: 'Asha Rao', COMPANY_ADDRESS: 'Mumbai' };
   r = await letters.handle('render', { id, client: 'northpeak', fields: { COMPANY: 'Northpeak' } }, hr);
   assert.equal(r.status, 200);
   assert.ok(r.body.missing.includes('CANDIDATE_NAME'));

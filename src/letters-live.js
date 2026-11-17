@@ -54,7 +54,7 @@ const AUTO = [
   [/^COMPANY(_NAME)?$|^ORGANI[SZ]ATION(_NAME)?$|^EMPLOYER(_NAME)?$/, 'client.company'], [/^COMPANY_SHORT/, 'client.short'],
   [/^COMPANY_CITY$/, 'client.city'], [/^COMPANY_STATE$/, 'client.state'], [/^COMPANY_(PIN|PINCODE|PIN_CODE|ZIP)$/, 'client.pincode'], [/COMPANY_ADDRESS|REGISTERED_ADDRESS|REGD_/, 'client.address'],
   [/^BRANCH|PLACE_OF_POSTING|WORK_LOCATION|^LOCATION$/, 'client.location'], [/NOTICE.*PROBATION/, 'client.noticeProbation'], [/NOTICE.*CONFIRM|^NOTICE_PERIOD$/, 'client.noticeConfirmed'],
-  [/CONFIRMATION_PERIOD|PROBATION/, 'client.probation'], [/^CANDIDATE_|^EMPLOYEE_/, 'ask'], [/^COMPANY_/, 'fixed']
+  [/CONFIRMATION_PERIOD|PROBATION/, 'client.probation'], [/RETIRE/, 'client.retirementAge'], [/JURISDICTION|COURT/, 'client.jurisdiction'], [/WORK_?WEEK/, 'client.workWeek'], [/HOLIDAY/, 'client.holidays'], [/^CANDIDATE_|^EMPLOYEE_/, 'ask'], [/^COMPANY_/, 'fixed']
 ];
 const pretty = n => String(n).replace(/^Image:/i, '').toLowerCase().replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase());
 // names: every placeholder in the template. When the letter also has COMPANY_CITY / STATE / PIN, its address
@@ -291,12 +291,13 @@ function renderEditor() {
     <div class="row" style="justify-content:space-between;align-items:center"><h4 style="margin:0">Set up: ${esc(e.name)}</h4><button class="btn small" id="dxClose" type="button">Close</button></div>
     <div class="form" style="margin-top:8px"><div class="field"><label class="lbl" for="dxEdName">Template name</label><input type="text" id="dxEdName" value="${esc(e.name)}"></div>
       <div class="field"><label class="lbl" for="dxDate">Dates appear as</label><select id="dxDate">${['d MMMM yyyy', 'dd/MM/yyyy', 'dd-MMM-yyyy', 'dd.MM.yyyy', 'MMMM d, yyyy'].map(f => `<option ${f === e.dateFmt ? 'selected' : ''} value="${f}">${esc(fmtDate('2026-12-01', f))}</option>`).join('')}</select></div></div>
+    <p class="note">Found in the file: ${sc.fields.length} placeholders, ${sc.regions.length} salary tables, ${sc.images.length} pictures. Word fields «NAME» and typed «NAME», &lt;&lt;NAME&gt;&gt; or {{NAME}} are all read.</p>
     ${sc.warnings && sc.warnings.length ? `<div class="dx-warn">${sc.warnings.map(w => `<div>⚠ ${esc(w)}</div>`).join('')}</div>` : ''}
     <h4 class="subh">Placeholders (${sc.fields.length})</h4>
     <p class="note">Each «placeholder» in the Word file and where its value comes from. "Same text on every letter" fills it once for this template; "HR types it on each offer" adds a box on the Offer desk. The example column uses the offer open on the Offer desk.</p>
     <div class="tscroll"><table class="dx-map"><tr><th>Placeholder</th><th>Fill from</th><th>Text / question</th><th>Example</th></tr>
     ${sc.fields.map(f => { const m = e.map[f.name] || autoMap(f.name); const need = m.src === 'fixed' && !m.value;
-      return `<tr class="${need ? 'need' : ''}"><td><code>«${esc(f.name)}»</code><div class="note">${f.count}× · ${esc(where(f))}</div></td><td>${srcSelect(f.name, m.src)}</td>
+      return `<tr class="${need ? 'need' : ''}"><td><code>«${esc(f.name)}»</code><div class="note">${f.count}× · ${esc(where(f))}${f.styles ? ' · ' + esc(f.styles.join(', ')) : ''}</div></td><td>${srcSelect(f.name, m.src)}</td>
         <td>${m.src === 'fixed' ? `<input type="text" data-dxval="${esc(f.name)}" value="${esc(m.value || '')}" placeholder="Type the text for every letter">` : m.src === 'ask' ? `<input type="text" data-dxlab="${esc(f.name)}" value="${esc(m.label || pretty(f.name))}" placeholder="Label HR sees">` : '<span class="note">—</span>'}</td>
         <td class="note">${m.src === 'ask' ? 'Typed by HR' : m.src === 'blank' ? '(empty)' : esc(sample[f.name] !== undefined ? sample[f.name] : (m.src.startsWith('sig.') ? 'From the chosen signatory' : 'Not available yet'))}</td></tr>`; }).join('')}</table></div>
     ${sc.images.length ? `<h4 class="subh">Pictures</h4><div class="tscroll"><table><tr><th>Placeholder</th><th>Use</th><th></th></tr>${sc.images.map(k => { const m = e.images[k] || { src: 'blank' };

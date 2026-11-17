@@ -144,8 +144,8 @@ function replaceField(f, nodes) {
   for (const r of f.runs) if (r.parentNode) r.parentNode.removeChild(r);
 }
 
-/* ---------- typed markers: «NAME» or {{NAME}} written as plain text (not Word fields) ---------- */
-const TOKEN = /«\s*([A-Za-z][A-Za-z0-9_]{0,60})\s*»|\{\{\s*([A-Za-z][A-Za-z0-9_]{0,60})\s*\}\}/g;
+/* ---------- typed markers: «NAME», <<NAME>> or {{NAME}} written as plain text (not Word fields) ---------- */
+const TOKEN = /«\s*([A-Za-z][A-Za-z0-9_]{0,60})\s*»|<<\s*([A-Za-z][A-Za-z0-9_]{0,60})\s*>>|\{\{\s*([A-Za-z][A-Za-z0-9_]{0,60})\s*\}\}/g;
 // Text of each paragraph, leaving out the text Word shows for fields (their «NAME» is not a typed marker).
 function paragraphTexts(root) {
   const inField = new Set();
@@ -157,20 +157,23 @@ function paragraphTexts(root) {
   }
   return out;
 }
+// Typed markers ({ name, style }) and text that looks like a placeholder but cannot be filled (e.g. "<Court location>").
 function typedNames(root) {
-  const names = [];
+  const names = [], odd = [];
   for (const ts of paragraphTexts(root)) {
     const text = ts.map(textOf).join('');
-    for (const m of text.matchAll(TOKEN)) names.push(m[1] || m[2]);
+    for (const m of text.matchAll(TOKEN)) names.push({ name: m[1] || m[2] || m[3], style: m[1] ? '«»' : m[2] ? '<<>>' : '{{}}' });
+    const rest = text.replace(TOKEN, '');
+    for (const m of rest.matchAll(/<[^<>\n]{2,80}>|\[\[[^\]]{2,60}\]\]|«[^»]{1,80}»|\{\{[^}]{1,60}\}\}|\{[A-Z_][A-Za-z0-9_ ]{1,40}\}/g)) odd.push(m[0].trim());
   }
-  return names;
+  return { names, odd };
 }
 // value(name) -> string, or undefined to leave the marker as it is
 function replaceTyped(root, value) {
   for (const ts of paragraphTexts(root)) {
     const parts = ts.map(textOf);
     const text = parts.join('');
-    const hits = [...text.matchAll(TOKEN)].map(m => ({ at: m.index, len: m[0].length, v: value(m[1] || m[2]) })).filter(h => h.v !== undefined);
+    const hits = [...text.matchAll(TOKEN)].map(m => ({ at: m.index, len: m[0].length, v: value(m[1] || m[2] || m[3]) })).filter(h => h.v !== undefined);
     if (!hits.length) continue;
     for (const h of hits.reverse()) {
       let pos = 0, si = -1, so = 0, ei = -1, eo = 0;
@@ -309,14 +312,18 @@ async function scan(buffer) {
       if (/^Image:/i.test(mf.name)) { images.add(mf.name.replace(/^Image:/i, '')); continue; }
       const e = fields.get(mf.name) || { name: mf.name, count: 0, parts: [] };
       e.count++;
+      e.styles = [...new Set((e.styles || []).concat('Word field'))];
       const part = name.replace(/^word\//, '').replace(/\.xml$/, '').replace(/\d+$/, '');
       if (!e.parts.includes(part)) e.parts.push(part);
       fields.set(mf.name, e);
     }
-    for (const nm of typedNames(doc.documentElement)) {
+    const typed = typedNames(doc.documentElement);
+    for (const o of typed.odd) warnings.push(`"${o.slice(0, 80)}" looks like a placeholder but is not one the tool can fill (use «NAME», <<NAME>> or {{NAME}} with letters, numbers and _ only). It will print as it is.`);
+    for (const { name: nm, style } of typed.names) {
       if (/^Table(Start|End)/i.test(nm)) continue;
       const e = fields.get(nm) || { name: nm, count: 0, parts: [] };
       e.count++;
+      e.styles = [...new Set((e.styles || []).concat('typed ' + style))];
       const part = name.replace(/^word\//, '').replace(/\.xml$/, '').replace(/\d+$/, '');
       if (!e.parts.includes(part)) e.parts.push(part);
       fields.set(nm, e);
