@@ -13,6 +13,7 @@ const links = require('./links');
 const emailLib = require('./email');
 const { getStore } = require('./store');
 const steps = require('./step-templates');
+const calls = require('./calls');
 
 const SYSTEM = { name: 'onboarding-agent' };
 const newId = p => `${p}-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
@@ -168,7 +169,14 @@ async function runCandidate(store, id, cand, plans, realNow = Date.now()) {
     waBusy: due.length > 0 || Boolean((cand.readiness && cand.readiness.pending && now - Date.parse(cand.readiness.pending.at) < 2 * 3600000) || (cand.induction && cand.induction.pending && cand.induction.pending.at && now - Date.parse(cand.induction.pending.at) < 2 * 3600000)),
     pending: openInduction(cand, plans[clientId]), hrEmail: (setup.contacts && setup.contacts.hr) || notify.hrAddress(hrSt), link: links.link, candidateId: id
   };
+  // AI calls for journey steps: only when the scheduler runs (plans.__calls) and the client's Automatic calls is on.
+  const cl = plans.__calls;
+  if (cl && cl.on) {
+    const busy = cand.lastCall && cand.lastCall.status === 'dialing' && realNow - Date.parse(cand.lastCall.at) < 12 * 60000;
+    ctx.calls = { on: true, ok: calls.withinHours(realNow) && !busy, left: cl.left };
+  }
   for (const c of checkins.due(cand, setup, now, ctx)) {
+    if (c.call) { if (await placeStepCall(store, id, cand, c, cl)) sends++; continue; }
     sends += await sendCheckin(store, id, cand, c, SYSTEM, ctx);
   }
   // 3. Owners: reminder the day before the due date, escalation to HR the day after.
@@ -209,6 +217,22 @@ async function runCandidate(store, id, cand, plans, realNow = Date.now()) {
   return sends;
 }
 
+// The scheduler places a journey step's AI call. When it cannot start, the step is put back as it was
+// (it is tried again on a later run, or goes by WhatsApp as the step's setting says).
+async function placeStepCall(store, id, cand, c, cl) {
+  const r = await calls.start({ candidateId: id, checkin: c.call }, null, { auto: true, cand }).catch(e => ({ status: 500, body: { error: e.message } }));
+  if (r.status === 200) {
+    cl.left = Math.max(0, cl.left - 1);
+    const a = cand.checkins && cand.checkins.asks[c.key];
+    if (a && a.call) a.call.callId = r.body.callId;
+    return true;
+  }
+  checkins.undoCall(cand, c);
+  if (r.body && /not_configured|onboarding_off/.test(r.body.error || '')) cl.on = false;
+  else console.error('step call not started', id, c.key, r.body && (r.body.detail || r.body.error));
+  return false;
+}
+
 // Delivers one check-in (WhatsApp, email, or an escalation to HR). Returns the number of sends.
 async function sendCheckin(store, id, cand, c, by) {
   let n = 0;
@@ -240,6 +264,8 @@ async function tick(realNow = Date.now(), budgetMs = 22000) {
   const onFor = {}; // client -> Onboarding switched on? (Client setup → Modules)
   const modules = require('./modules');
   let candidates = 0, sent = 0, skipped = 0, looked = 0;
+  // AI calls this run may place (journey steps of clients with Automatic calls on); spread over runs, not all at once.
+  plans.__calls = { on: calls.callsConfigured(), left: Math.max(0, Math.min(50, +process.env.CALLS_PER_RUN || 5)) };
   // Start somewhere different every 15 minutes, so with many candidates nobody is always last.
   const all = (await store.list('candidates')).filter(r => r.data && !finished(r.data, realNow));
   const start = all.length ? Math.floor(realNow / (15 * 60000)) % all.length : 0;
@@ -359,6 +385,21 @@ async function checkinAction(action, p, user) {
     cand.contacts = { manager: emailLib.addresses(p.manager).join(', '), buddy: emailLib.addresses(p.buddy).join(', ') };
     await store.put('candidates', candidateId, cand, user);
     return { status: 200, body: { contacts: cand.contacts } };
+  }
+  if (action === 'call') {
+    // HR: the AI voice agent calls the candidate about this step now (Automatic calls on or off).
+    const clientId = cand.profile && cand.profile.client;
+    const setup = await setupFor(store, clientId);
+    const hrSt = await notify.settings(store, clientId);
+    const ctx = { pending: openInduction(cand, await planFor(store, clientId)), hrEmail: (setup.contacts && setup.contacts.hr) || notify.hrAddress(hrSt), link: links.link, candidateId };
+    const c = checkins.callNow(cand, setup, str(p.key, 80), ctx);
+    if (!c) return { status: 404, body: { error: 'checkin_not_found' } };
+    if (c.error) return { status: 400, body: { error: c.error, detail: 'Calls are only for steps that go to the candidate.' } };
+    const r = await calls.start({ candidateId, checkin: c.call, force: Boolean(p.force) }, user, { cand });
+    if (r.status !== 200) return r;
+    checkins.markCalled(cand, c.key, r.body.callId, user.name);
+    await store.put('candidates', candidateId, cand, user);
+    return { status: 200, body: { callId: r.body.callId, checkins: cand.checkins } };
   }
   if (action === 'answer') {
     const setup = await setupFor(store, cand.profile && cand.profile.client);

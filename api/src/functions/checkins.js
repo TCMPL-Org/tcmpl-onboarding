@@ -8,6 +8,7 @@ const { guard } = require('../lib/access');
 //   POST /api/checkins/save     { client, setup }              -> save the setup
 //   POST /api/checkins/send     { candidateId, key }           -> send one check-in now (WhatsApp and/or email)
 //   POST /api/checkins/answer   { candidateId, key, value }    -> HR records an answer (e.g. given on a call)
+//   POST /api/checkins/call     { candidateId, key, force? }   -> the AI voice agent calls the candidate about this step now
 //   POST /api/checkins/contacts { candidateId, manager, buddy } -> this candidate's manager / buddy email
 app.http('checkins', {
   methods: ['POST'],

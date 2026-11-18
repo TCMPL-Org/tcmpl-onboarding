@@ -1,5 +1,6 @@
 // Client setup → Journey setup: everything the agent asks or tells people on a cadence, per client.
-// Each row: who it goes to, channel (WhatsApp / Email / both), day relative to joining + time, repeat, the message,
+// Each row: who it goes to, channel (WhatsApp / Email / both), an optional AI call (placed automatically only when the
+// client's "Automatic AI calls" switch is on; off by default), day relative to joining + time, repeat, the message,
 // the answer type, answers that alert HR, reminder and escalation. TCMPL default until HR changes it.
 // Sending and answers are in Candidate journey (one step per check-in).
 
@@ -10,6 +11,7 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&a
 const STAGES = [['pre', 'Pre-joining'], ['day1', 'Joining day'], ['p90', 'First 90 days'], ['close', 'Closure']];
 const TO = [['candidate', 'Candidate'], ['manager', 'Manager'], ['hr', 'HR'], ['buddy', 'Buddy'], ['email', 'Other email']];
 const CH = [['whatsapp', 'WhatsApp'], ['email', 'Email'], ['both', 'WhatsApp + Email']];
+const CALL = [['', 'No call'], ['noreply', 'WhatsApp, then AI call if no answer'], ['call', 'AI call first (WhatsApp if not reached)'], ['both', 'WhatsApp and an AI call']];
 const ANS = [['buttons', 'Choice buttons'], ['rating', 'Rating 1–5'], ['date', 'Date'], ['text', 'Free text'], ['none', 'No answer (information)']];
 const JOIN = [['reportTime', 'Report by (time)'], ['address', 'Office address'], ['mapUrl', 'Google Maps link (optional, made from the address if empty)'], ['poc', 'Point of contact on day 1'], ['pocPhone', 'Point of contact phone'], ['dress', 'Dress code'], ['bring', 'What to bring']];
 
@@ -36,7 +38,7 @@ function mount() {
   const after = $('#slive') || sec.querySelector('.intro');
   after.after(box);
   $('#ckSave').onclick = save;
-  $('#ckAdd').onclick = () => { collect(); setup.items.push({ id: 'new-' + Math.random().toString(36).slice(2, 7), stage: 'p90', title: 'New check-in', to: 'candidate', channel: 'whatsapp', day: 7, time: '11:00', every: 0, until: null, text: 'Hi {first}, …', answer: 'buttons', options: ['Yes', 'Not yet'], flag: ['Not yet'], stopOn: [], remind: 24, escalate: true, saveAs: '', when: '', off: false, _open: true }); dirty = true; render(); };
+  $('#ckAdd').onclick = () => { collect(); setup.items.push({ id: 'new-' + Math.random().toString(36).slice(2, 7), stage: 'p90', title: 'New check-in', to: 'candidate', channel: 'whatsapp', day: 7, time: '11:00', every: 0, until: null, text: 'Hi {first}, …', answer: 'buttons', options: ['Yes', 'Not yet'], flag: ['Not yet'], stopOn: [], remind: 24, escalate: true, saveAs: '', when: '', off: false, call: '', callAfter: 24, _open: true }); dirty = true; render(); };
   $('#ckReset').onclick = () => { if (!defaults) return; const keep = { joining: setup.joining, contacts: setup.contacts }; setup = Object.assign(JSON.parse(JSON.stringify(defaults)), keep); dirty = true; render(); $('#ckState').textContent = 'TCMPL default loaded: click Save to keep it.'; };
   document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab === 'config') load(); }));
   const sel = $('#clientSel'); if (sel) sel.addEventListener('change', () => setTimeout(load, 60));
@@ -62,7 +64,7 @@ async function load() {
 }
 
 function itemHtml(it, i) {
-  const sum = `${rel(it.day)} ${esc(it.time)} · <b>${esc(it.title)}</b> · ${esc(label(it.to, TO))} · ${esc(label(it.channel, CH))}${it.every ? ` · every ${it.every} days until ${rel(it.until ?? it.day)}` : ''}${it.off ? ' · <i>off</i>' : ''}`;
+  const sum = `${rel(it.day)} ${esc(it.time)} · <b>${esc(it.title)}</b> · ${esc(label(it.to, TO))} · ${esc(label(it.channel, CH))}${it.every ? ` · every ${it.every} days until ${rel(it.until ?? it.day)}` : ''}${it.call && it.to === 'candidate' ? ' · 📞 ' + esc(label(it.call, CALL)) : ''}${it.off ? ' · <i>off</i>' : ''}`;
   return `<details class="ck-it" data-i="${i}" ${it._open ? 'open' : ''}><summary><label class="note" style="display:inline-flex;gap:4px;align-items:center;margin-right:6px" onclick="event.stopPropagation()"><input type="checkbox" data-f="on" ${it.off ? '' : 'checked'}> on</label>${sum}</summary>
     <div class="ck-grid">
       <label>Title<input data-f="title" value="${esc(it.title)}"></label>
@@ -82,6 +84,8 @@ function itemHtml(it, i) {
       <label>Stop repeating when the answer is<input data-f="stopOn" value="${esc(csv(it.stopOn))}"></label>
       <label>Reminder if no answer (hours, 0 = none)<input data-f="remind" type="number" min="0" value="${esc(it.remind || 0)}"></label>
       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-f="escalate" ${it.escalate ? 'checked' : ''}> Tell HR if still no answer after the reminder</label>
+      <label>AI call ${it.to === 'candidate' ? '' : '<span class="note">(candidate steps only)</span>'}<select data-f="call">${opt(CALL, it.call || '')}</select></label>
+      <label>…call if no answer after (hours)<input data-f="callAfter" type="number" min="1" max="240" value="${esc(it.callAfter || 24)}"></label>
       <label>Only while induction is open<select data-f="when"><option value="">Always</option><option value="induction_open" ${it.when === 'induction_open' ? 'selected' : ''}>Only if induction is not complete</option></select></label>
     </div>
     <label class="note" style="display:block;margin-top:6px">Message · placeholders: {first} {name} {doj} {company} {role} {manager} {reportTime} {address} {map} {poc} {pocPhone} {dress} {bring} {pending} {inductionDue} {hrEmail}
@@ -97,6 +101,11 @@ function render() {
     <div class="row" style="gap:16px;flex-wrap:wrap;margin-bottom:8px">
       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="ckOn" ${s.enabled !== false ? 'checked' : ''}> Send check-ins automatically for this client</label>
       <label>Induction must be completed within <input id="ckIndDays" type="number" min="1" max="120" value="${esc(s.inductionDays || 21)}" style="width:70px"> days of joining</label>
+    </div>
+    <div class="ck-calls">
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="ckAutoCall" ${s.autoCall ? 'checked' : ''}> <b>Automatic AI calls</b> for this client</label>
+      <p class="note" style="margin:4px 0 8px">Off by default. While it is off, nothing is dialled by itself: HR can still use <b>📞 Call now (AI)</b> on any candidate step in Candidate journey. When on, each step's <b>AI call</b> setting below is followed: calls go out between 9 am and 8 pm IST, up to 3 tries 2 hours apart, one call per candidate at a time; the answer given on the call completes the step and red answers alert HR. The offer letter, documents, forms and links always go on WhatsApp.</p>
+      <div class="row" style="gap:6px;flex-wrap:wrap"><span class="note">Set the AI call for every candidate step:</span><select id="ckAllCall">${opt(CALL, '')}</select><button class="btn small" id="ckAllCallGo" type="button">Apply to all steps</button><button class="btn small" id="ckCallTips" type="button">Use the recommended calls</button></div>
     </div>
     <details open><summary><b>Joining details</b> (used in the joining message, with a Google Maps link)</summary>
       <div class="ck-grid">${JOIN.map(([k, l]) => `<label>${esc(l)}<input data-j="${k}" value="${esc(j[k] || '')}"></label>`).join('')}</div></details>
@@ -116,6 +125,17 @@ function render() {
   const body = $('#ckBody');
   body.oninput = () => { dirty = true; $('#ckState').textContent = 'Not saved yet'; };
   body.onchange = body.oninput;
+  $('#ckAllCallGo').onclick = () => {
+    collect(); const v = $('#ckAllCall').value;
+    let n = 0; setup.items.forEach(it => { if (it.to === 'candidate' && !it.off) { it.call = v; n++; } });
+    dirty = true; render(); $('#ckState').textContent = `AI call set to "${label(v, CALL)}" on ${n} candidate steps: click Save to keep it.`;
+  };
+  $('#ckCallTips').onclick = () => {
+    collect(); if (!defaults) return;
+    const tip = Object.fromEntries((defaults.items || []).map(d => [d.id, [d.call || '', d.callAfter || 24]]));
+    let n = 0; setup.items.forEach(it => { if (it.to !== 'candidate') return; const t = tip[it.id]; it.call = t ? t[0] : ''; if (t) it.callAfter = t[1]; if (it.call) n++; });
+    dirty = true; render(); $('#ckState').textContent = `Recommended calls set on ${n} steps (resignation, relieving date, day before joining, Day-1 arrival, role clarity, Day-90 rating): click Save to keep it.`;
+  };
   body.querySelectorAll('[data-del]').forEach(b => { b.onclick = () => { collect(); setup.items.splice(+b.dataset.del, 1); dirty = true; render(); }; });
 }
 
@@ -123,6 +143,7 @@ function collect() {
   const s = setup;
   if (!s || !$('#ckOn')) return s;
   s.enabled = $('#ckOn').checked;
+  s.autoCall = $('#ckAutoCall').checked;
   s.inductionDays = +$('#ckIndDays').value || 21;
   document.querySelectorAll('#ckBody [data-j]').forEach(el => { s.joining[el.dataset.j] = el.value.trim(); });
   document.querySelectorAll('#ckBody [data-c]').forEach(el => { s.contacts[el.dataset.c] = el.value.trim(); });
@@ -132,7 +153,8 @@ function collect() {
     const v = f => d.querySelector(`[data-f="${f}"]`);
     it._open = d.open;
     it.off = !v('on').checked;
-    for (const f of ['title', 'stage', 'time', 'to', 'email', 'cc', 'replyTo', 'channel', 'answer', 'text', 'when']) it[f] = v(f).value;
+    for (const f of ['title', 'stage', 'time', 'to', 'email', 'cc', 'replyTo', 'channel', 'answer', 'text', 'when', 'call']) it[f] = v(f).value;
+    it.callAfter = +v('callAfter').value || 24;
     it.day = +v('day').value || 0; it.every = +v('every').value || 0;
     it.until = v('until').value === '' ? null : +v('until').value;
     it.options = fromCsv(v('options').value); it.flag = fromCsv(v('flag').value); it.stopOn = fromCsv(v('stopOn').value);

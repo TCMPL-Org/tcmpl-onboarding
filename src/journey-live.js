@@ -306,7 +306,8 @@ function ckStatus(c, s) {
   const a = ((c.checkins || {}).asks || {})[s.key];
   if (!a) return null;
   if (a.answer && a.flagged) return S('Needs HR: ' + a.answer, 'bad', false, true);
-  if (a.answer) return S('✓ ' + (s.o.item.answer === 'rating' ? 'Rated ' + a.answer + '/5' : a.answer), 'ok', true);
+  if (a.answer) return S('✓ ' + (s.o.item.answer === 'rating' ? 'Rated ' + a.answer + '/5' : a.answer) + (a.by === 'call' ? ' (call)' : ''), 'ok', true);
+  if (a.call && a.call.status === 'dialing' && Date.now() - Date.parse(a.call.at) < 15 * 60000) return S('📞 Calling…', 'info', false, false, true);
   if (a.escalatedAt) return S('Needs HR: no answer', 'bad', false, true);
   if (a.missingAt) return S('Needs HR: ' + (a.why || 'no recipient'), 'bad', false, true);
   if (a.skipped) return S(a.why === 'not needed' ? 'Not needed' : 'Skipped (too late)', '', true);
@@ -673,6 +674,23 @@ function ckFill(text, c) {
   return String(text || '').replace(/\{(\w+)\}/g, (m, k) => (k in v ? v[k] : m));
 }
 
+const CALL_LABEL = { noreply: 'WhatsApp, then a call if no answer', call: 'call first, WhatsApp if not reached', both: 'WhatsApp and a call' };
+const STEP_CALL_ST = { dialing: 'calling', answered: 'answered', no_answer: 'not answered', busy: 'busy', declined: 'declined', failed: 'could not connect' };
+// HR: the AI voice agent calls the candidate about this check-in step; the answer on the call completes the step.
+async function stepCallNow(c, s) {
+  const u = U();
+  if (!window.confirm(`Call ${c.name} now on +${c.phone} about "${s.o.item.title}"?\n\nThe AI voice assistant asks this step's question in English or Hindi. The answer completes the step here, and the transcript shows under Calls.`)) return;
+  const go = force => u.getJson('/api/checkins/call', { method: 'POST', body: JSON.stringify({ candidateId: c.id, key: s.key, force }) }).catch(() => ({ ok: false }));
+  const b = $('#jlCkCall'); if (b) b.disabled = true;
+  let r = await go(false);
+  if (!r.ok && r.body && r.body.error === 'outside_hours' && window.confirm(`${r.body.detail}\nCall anyway?`)) r = await go(true);
+  if (b) b.disabled = false;
+  if (r.ok) { u.toast(`Calling ${c.name}… The answer appears on this step when the call ends.`); await reload(selected); }
+  else if (r.body && r.body.error === 'call_in_progress') u.toast('A call to this candidate is still in progress.');
+  else if (r.body && r.body.error === 'calls_not_configured') u.toast('Calling is not set up yet (LiveKit settings in Azure).');
+  else if (!(r.body && r.body.error === 'outside_hours')) u.toast('Call not started: ' + ((r.body && (r.body.detail || r.body.error)) || 'error'));
+}
+
 function renderCkStep(box, c, s, when) {
   const it = s.o.item, a = ((c.checkins || {}).asks || {})[s.key] || {};
   const ck = ckSetups[c.profile && c.profile.client] || {};
@@ -686,9 +704,11 @@ function renderCkStep(box, c, s, when) {
   box.innerHTML = panel({
     title: s.label, status: s.status, when: when + (it.every ? ` · repeats every ${it.every} days` : ''), who,
     what: `<pre class="jl-mail" style="white-space:pre-wrap">${esc(ckFill(it.text, c))}</pre><p class="note" style="margin:6px 0 0">${ans}${it.remind ? ` Reminder after ${it.remind} h without an answer${it.escalate ? ', then HR is alerted' : ''}.` : ''} ${health.scheduler ? 'Goes automatically at this time.' : 'Automatic sending is not set up: use the button.'} Change it in Client setup → Journey setup.</p>${contactsBox}`,
-    actions: `<button class="btn primary" id="jlCkNow" type="button">${a.sentAt ? 'Send again now' : 'Send now'}</button>`,
-    result: (a.sentAt || a.answer || a.skipped || a.missingAt) ? `<p style="margin:0">${a.sentAt ? `Sent ${esc(fmtTime(a.sentAt))}${a.via ? ' by ' + esc(a.via.replace('+', ' and ')) : ''}` : ''}${a.emailError ? ' · <span class="jl-st-bad">' + esc(a.emailError) + '</span>' : ''}${a.remindedAt ? ' · reminded ' + esc(fmtTime(a.remindedAt)) : ''}${a.escalatedAt ? ' · HR alerted ' + esc(fmtTime(a.escalatedAt)) : ''}${a.answer ? `<br>Answer: <b>${esc(a.answer)}</b>${a.by ? ' (' + esc(a.by) + ')' : ''} ${esc(fmtTime(a.answeredAt))}${a.flagged ? ' · <span class="jl-st-bad">sent to HR</span>' : ''}` : ''}${a.skipped ? 'Skipped: ' + esc(a.why || '') : ''}${a.missingAt ? '<span class="jl-st-bad">Not sent: ' + esc(a.why || '') + '</span>' : ''}</p>${rec}` : rec
+    actions: `<button class="btn primary" id="jlCkNow" type="button">${a.sentAt ? 'Send again now' : 'Send now'}</button>${toCand ? `<button class="btn small" id="jlCkCall" type="button">📞 Call now (AI)</button>` : ''}${toCand && it.call ? `<span class="note">AI call: ${esc(CALL_LABEL[it.call] || it.call)}${ck.setup && ck.setup.autoCall ? ' (automatic)' : ' (automatic calls are off for this client)'}</span>` : ''}`,
+    result: (a.sentAt || a.answer || a.skipped || a.missingAt) ? `<p style="margin:0">${a.sentAt ? `Sent ${esc(fmtTime(a.sentAt))}${a.via ? ' by ' + esc(a.via.replace('+', ' and ')) : ''}` : ''}${a.emailError ? ' · <span class="jl-st-bad">' + esc(a.emailError) + '</span>' : ''}${a.remindedAt ? ' · reminded ' + esc(fmtTime(a.remindedAt)) : ''}${a.escalatedAt ? ' · HR alerted ' + esc(fmtTime(a.escalatedAt)) : ''}${a.call ? ' · 📞 called ' + esc(a.call.tries || 1) + 'x, last ' + esc(fmtTime(a.call.at)) + ' (' + esc(STEP_CALL_ST[a.call.status] || a.call.status || '') + (a.call.status === 'answered' && !a.answer && it.answer !== 'none' ? ', no answer to the step' : '') + ')' : ''}${a.answer ? `<br>Answer: <b>${esc(a.answer)}</b>${a.by ? ' (' + esc(a.by) + ')' : ''} ${esc(fmtTime(a.answeredAt))}${a.flagged ? ' · <span class="jl-st-bad">sent to HR</span>' : ''}` : ''}${a.skipped ? 'Skipped: ' + esc(a.why || '') : ''}${a.missingAt ? '<span class="jl-st-bad">Not sent: ' + esc(a.why || '') + '</span>' : ''}</p>${rec}` : rec
   });
+  const callBtn = $('#jlCkCall');
+  if (callBtn) callBtn.onclick = () => stepCallNow(c, s);
   $('#jlCkNow').onclick = async () => {
     $('#jlCkNow').disabled = true;
     const r = await U().getJson('/api/checkins/send', { method: 'POST', body: JSON.stringify({ candidateId: c.id, key: s.key }) }).catch(() => ({ ok: false }));

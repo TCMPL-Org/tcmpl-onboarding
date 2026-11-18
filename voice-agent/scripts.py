@@ -49,9 +49,37 @@ PURPOSES = {
 }
 
 
+def step_purpose(step: dict) -> dict:
+    """A journey step's call (Client setup -> Journey setup): its own question and the answers to collect."""
+    title = step.get("title") or "Onboarding check-in"
+    question = (step.get("question") or "").strip()
+    answer = step.get("answer") or "text"
+    options = [o for o in (step.get("options") or []) if o]
+    if answer == "none":
+        goal = (f'This call is the onboarding step "{title}". Tell them this, briefly and in your own words: "{question}". '
+                "Check they have understood and ask if they have any questions.")
+        collect = ["understood (yes / no)", "questions (anything they asked)"]
+    else:
+        goal = f'This call is the onboarding step "{title}". Ask this, in your own simple words: "{question}".'
+        if answer == "buttons" and options:
+            goal += " The possible answers are: " + ", ".join(options) + ". Do not read them out as a list; just ask naturally."
+            collect = ["answer (one of: " + " / ".join(options) + ")"]
+        elif answer == "rating":
+            goal += " Ask them to rate it from 1 (poor) to 5 (great), and why."
+            collect = ["rating (1-5)", "reason"]
+        elif answer == "date":
+            goal += " Get the exact date."
+            collect = ["the date"]
+        else:
+            collect = ["their answer"]
+        collect.append("questions (anything they asked)")
+    return {"title": title, "goal": goal, "collect": collect}
+
+
 def instructions(m: dict) -> str:
     """System instructions for one call, from the call details the app sends."""
-    p = PURPOSES.get(m.get("purpose") or "general", PURPOSES["general"])
+    step = m.get("step") if isinstance(m.get("step"), dict) else None
+    p = step_purpose(step) if step else PURPOSES.get(m.get("purpose") or "general", PURPOSES["general"])
     first = m.get("first") or "there"
     company = m.get("company") or "the company"
     agent = m.get("agentName") or f"{company} HR"
@@ -71,7 +99,7 @@ def instructions(m: dict) -> str:
     ]
     if facts:
         lines.append("- More company facts:\n" + facts)
-    if note:
+    if note and not step:
         lines.append(f"Note from HR for this call: {note}")
     lines += [
         "",

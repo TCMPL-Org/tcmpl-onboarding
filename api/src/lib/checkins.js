@@ -12,6 +12,10 @@ const { isOtherMessage } = require('./answers');
 // relative to joining + time, optional repeat (every N days until a day, stop on an answer), the message, the
 // answer type (buttons, rating 1–5, date, free text, none), answers that alert HR, a reminder and an escalation.
 //
+// AI calls (optional, per item, candidate items only): call = '' (none) | 'noreply' (WhatsApp first, a call if there is
+// no answer after callAfter hours) | 'call' (a call first, WhatsApp only if the call does not get through) | 'both'
+// (WhatsApp and a call, e.g. the evening-before details). They are placed automatically only when the client's
+// "Automatic calls" switch (setup.autoCall) is on; it is off by default. HR can always call from Candidate journey.
 // State on the candidate: checkins = { asks: { <key>: { sentAt, via, answer, answeredAt, by, flagged, remindedAt, escalatedAt, skipped } },
 //                                       pending: { key, at } }, prejoin = { <saveAs>: { value, at } }, contacts = { manager, buddy }
 
@@ -22,6 +26,10 @@ const STAGES = ['pre', 'day1', 'p90', 'close'];
 const TO = ['candidate', 'manager', 'hr', 'buddy', 'email'];
 const CHANNELS = ['whatsapp', 'email', 'both'];
 const ANSWERS = ['buttons', 'rating', 'date', 'text', 'none'];
+const CALLS = ['noreply', 'call', 'both'];
+const CALL_TRIES = 3;            // first attempt + 2 retries
+const CALL_RETRY_H = 2;          // hours between attempts
+const CALL_WAIT_MS = 15 * 60000; // a call still "dialing" after this is treated as not answered
 
 const nowIso = t => new Date(t || Date.now()).toISOString();
 const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
@@ -29,14 +37,14 @@ const slug = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').repl
 
 // ---------------------------------------------------------------- TCMPL default
 const DEFAULT_INFRA = ['Workstation / seat', 'Canteen coupons', 'Parking pass'];
-const I = (o) => Object.assign({ to: 'candidate', email: '', cc: '', replyTo: '', channel: 'whatsapp', time: '11:00', every: 0, until: null, answer: 'buttons', options: [], flag: [], remind: 24, escalate: true, saveAs: '', stopOn: [], when: '', off: false }, o);
+const I = (o) => Object.assign({ to: 'candidate', email: '', cc: '', replyTo: '', channel: 'whatsapp', time: '11:00', every: 0, until: null, answer: 'buttons', options: [], flag: [], remind: 24, escalate: true, saveAs: '', stopOn: [], when: '', off: false, call: '', callAfter: 24 }, o);
 const DEFAULT_ITEMS = [
   I({ id: 'resign', stage: 'pre', title: 'Resignation status', day: -28, every: 7, until: -7, stopOn: ['Yes, submitted'], saveAs: 'resignation',
-    text: 'Hi {first}, a quick check: have you submitted your resignation at your current company?', options: ['Yes, submitted', 'Not yet', 'Need help'], flag: ['Need help'] }),
+    text: 'Hi {first}, a quick check: have you submitted your resignation at your current company?', options: ['Yes, submitted', 'Not yet', 'Need help'], flag: ['Need help'], call: 'noreply' }),
   I({ id: 'exit-agree', stage: 'pre', title: 'Manager / HR agreement at current company', day: -24, saveAs: 'exitAgreement',
     text: 'Has your current manager or HR accepted your resignation and agreed your last working day?', options: ['Yes, agreed', 'Still discussing', 'There is a problem'], flag: ['There is a problem'] }),
   I({ id: 'relieving', stage: 'pre', title: 'Relieving date', day: -21, answer: 'date', saveAs: 'relievingDate',
-    text: 'What is your confirmed *relieving (last working) date*? Please reply with the date, for example 25/11/2026.' }),
+    text: 'What is your confirmed *relieving (last working) date*? Please reply with the date, for example 25/11/2026.', call: 'noreply' }),
   I({ id: 'notice-pay', stage: 'pre', title: 'Notice-pay reimbursement', day: -20, saveAs: 'noticePay',
     text: 'Will you need to pay for any part of your notice period (notice buy-out)?', options: ['No', 'Yes, need support', 'Not sure yet'], flag: ['Yes, need support'] }),
   I({ id: 'travel', stage: 'pre', title: 'Travel for joining', day: -14, saveAs: 'travel',
@@ -48,13 +56,13 @@ const DEFAULT_ITEMS = [
   I({ id: 'joining-info', stage: 'pre', title: 'Joining details, point of contact and map', channel: 'both', day: -3, time: '12:00', remind: 0, escalate: false,
     text: 'Your joining details, {first}:\n\n📅 {doj}, please report by {reportTime}\n📍 {address}\n🗺️ Map: {map}\n🙋 Ask for {poc}{pocPhone}\n👔 Dress: {dress}\n🎒 Please bring: {bring}', options: ['Got it', 'I have a question'], flag: ['I have a question'] }),
   I({ id: 'eve', stage: 'pre', title: 'Evening before joining', day: -1, time: '18:00', answer: 'none', remind: 0, escalate: false,
-    text: 'See you tomorrow, {first}! Report by {reportTime} at {address} and ask for {poc}. Map: {map}' }),
+    text: 'See you tomorrow, {first}! Report by {reportTime} at {address} and ask for {poc}. Map: {map}', call: 'both' }),
   I({ id: 'arrive', stage: 'day1', title: 'Arrived and met point of contact?', day: 0, time: '10:30', remind: 2,
-    text: 'Good morning {first}, welcome! Have you reached and met {poc}?', options: ['Yes', 'Not yet', 'Running late'], flag: ['Not yet'] }),
+    text: 'Good morning {first}, welcome! Have you reached and met {poc}?', options: ['Yes', 'Not yet', 'Running late'], flag: ['Not yet'], call: 'noreply', callAfter: 1 }),
   I({ id: 'day1-survey', stage: 'day1', title: 'Day-1 experience survey', day: 0, time: '18:00', answer: 'rating', remind: 0, escalate: false,
     text: 'How was your first day, {first}? Please reply with a number from *1* (poor) to *5* (great).' }),
   I({ id: 'role', stage: 'p90', title: 'Role clarity', day: 7, saveAs: 'roleClarity',
-    text: 'One week in! Is your role clear: do you know what is expected of you in the first 30 days?', options: ['Yes, clear', 'Partly', 'Not clear'], flag: ['Not clear'] }),
+    text: 'One week in! Is your role clear: do you know what is expected of you in the first 30 days?', options: ['Yes, clear', 'Partly', 'Not clear'], flag: ['Not clear'], call: 'call' }),
   I({ id: 'intros', stage: 'p90', title: 'Team, customer and stakeholder introductions', day: 7, time: '15:00',
     text: 'Have you been introduced to your team and the key stakeholders or customers you will work with?', options: ['Yes', 'Some of them', 'Not yet'], flag: ['Not yet'] }),
   I({ id: 'buddy', stage: 'p90', title: 'Buddy connect', day: 3,
@@ -72,7 +80,7 @@ const DEFAULT_ITEMS = [
   I({ id: 'hr-pulse', stage: 'p90', title: 'HR mid-point check-in', to: 'hr', channel: 'email', day: 45, time: '10:00',
     text: 'Mid-point check for {name}: have you spoken with them and their manager about how onboarding is going?', options: ['Done, all fine', 'Done, issues found'], flag: ['Done, issues found'] }),
   I({ id: 'close-survey', stage: 'close', title: 'Day-90 survey', day: 89, time: '16:00', answer: 'rating', remind: 24, escalate: false,
-    text: 'You are almost at 90 days, {first}! Overall, how would you rate your onboarding? Reply *1* (poor) to *5* (excellent).' }),
+    text: 'You are almost at 90 days, {first}! Overall, how would you rate your onboarding? Reply *1* (poor) to *5* (excellent).', call: 'call' }),
   I({ id: 'close-call', stage: 'close', title: 'Closing call with HR', day: 90, time: '11:00', saveAs: 'closingCall',
     text: 'To close your onboarding, HR would like a short 15-minute call with you. Does that work?', options: ['Yes, call me', 'Not needed'], remind: 24, escalate: false }),
   I({ id: 'close-call-hr', stage: 'close', title: 'Closing call held? (HR)', to: 'hr', channel: 'email', day: 93, time: '10:00',
@@ -83,7 +91,7 @@ const DEFAULT_ITEMS = [
 const DEFAULT_JOINING = { reportTime: '', address: '', mapUrl: '', poc: '', pocPhone: '', dress: '', bring: '' };
 
 function defaults() {
-  return { enabled: true, inductionDays: 21, infra: DEFAULT_INFRA.slice(), joining: Object.assign({}, DEFAULT_JOINING), contacts: { manager: '', hr: '', buddy: '' }, items: JSON.parse(JSON.stringify(DEFAULT_ITEMS)) };
+  return { enabled: true, autoCall: false, inductionDays: 21, infra: DEFAULT_INFRA.slice(), joining: Object.assign({}, DEFAULT_JOINING), contacts: { manager: '', hr: '', buddy: '' }, items: JSON.parse(JSON.stringify(DEFAULT_ITEMS)) };
 }
 
 // ---------------------------------------------------------------- setup (sanitised)
@@ -101,7 +109,8 @@ function cleanItem(x) {
     flag: (Array.isArray(x.flag) ? x.flag : []).map(o => str(String(o), 20).trim()).filter(o => opts.includes(o)),
     stopOn: (Array.isArray(x.stopOn) ? x.stopOn : []).map(o => str(String(o), 20).trim()).filter(o => opts.includes(o)),
     remind: num(x.remind, 0, 240, 0), escalate: Boolean(x.escalate), saveAs: str(x.saveAs, 30).replace(/[^\w]/g, ''),
-    when: x.when === 'induction_open' ? 'induction_open' : '', off: Boolean(x.off), infra: Boolean(x.infra)
+    when: x.when === 'induction_open' ? 'induction_open' : '', off: Boolean(x.off), infra: Boolean(x.infra),
+    call: CALLS.includes(x.call) ? x.call : '', callAfter: num(x.callAfter, 1, 240, 24)
   };
 }
 function cleanSetup(s) {
@@ -110,6 +119,7 @@ function cleanSetup(s) {
   const j = s.joining || {}, c = s.contacts || {};
   return {
     enabled: s.enabled !== false,
+    autoCall: s.autoCall === true,
     inductionDays: Number.isFinite(+s.inductionDays) ? Math.max(1, Math.min(120, Math.round(+s.inductionDays))) : 21,
     infra: Array.isArray(s.infra) ? s.infra.map(x => str(String(x), 40).trim()).filter(Boolean).slice(0, 15) : d.infra,
     joining: Object.fromEntries(Object.keys(DEFAULT_JOINING).map(k => [k, str(j[k], k === 'address' || k === 'bring' ? 300 : 200)])),
@@ -219,8 +229,19 @@ function stopped(r, o) {
   return Object.entries(r.asks).some(([k, a]) => k.startsWith(it.id + '@') && a.answer && it.stopOn.includes(a.answer));
 }
 
-// What is due for a candidate at `now`. ctx: { waBusy, pending: [open induction titles], hrEmail, link, candidateId }.
-// Returns [{ key, item, wa?, email?, reminder?, escalate? }] and records them as sent (caller saves the candidate).
+// The script an AI call follows for one occurrence (sent to the voice agent).
+function callScript(o, cand, setup, ctx = {}) {
+  const it = o.item;
+  const q = fill(it.text, cand, setup, ctx).replace(/\*/g, '').replace(/https?:\/\/\S+/g, '(link on WhatsApp)').slice(0, 900);
+  return { key: o.key, title: it.title, question: q, answer: it.answer, options: it.options.slice(), flag: it.flag.slice() };
+}
+const callMode = it => (it.to === 'candidate' ? it.call || '' : '');
+const callGoing = (c, now) => Boolean(c && c.status === 'dialing' && now - Date.parse(c.at) < CALL_WAIT_MS);
+
+// What is due for a candidate at `now`. ctx: { waBusy, pending: [open induction titles], hrEmail, link, candidateId,
+// calls: { on, ok, left } } (calls.on = calling is set up; ok = within calling hours and no call going on;
+// left = calls this scheduler run may still place). Calls are placed only when the client's setup.autoCall is on.
+// Returns [{ key, item, wa?, email?, call?, reminder?, escalate?, prev? }] and records them as sent (caller saves the candidate).
 function due(cand, setup, now, ctx = {}) {
   if (!setup || setup.enabled === false || cand.exited) return [];
   const doj = cand.profile && cand.profile.doj;
@@ -228,15 +249,54 @@ function due(cand, setup, now, ctx = {}) {
   const r = state(cand);
   const quiet = istHour(now) < QUIET.from || istHour(now) >= QUIET.to;
   let waBusy = Boolean(ctx.waBusy) || (r.pending && now - Date.parse(r.pending.at) < 2 * H);
+  const calls = setup.autoCall && ctx.calls && ctx.calls.on ? ctx.calls : null;
+  let called = false; // at most one call per candidate per run
+  const canCall = () => Boolean(calls && calls.ok && !called && calls.left > 0);
   const out = [];
+  const placeCall = (o, a, prev) => {
+    called = true; calls.left--;
+    a.call = { tries: ((a.call && a.call.tries) || 0) + 1, at: nowIso(now), status: 'dialing', auto: true };
+    out.push({ key: o.key, item: o.item, call: callScript(o, cand, setup, ctx), prev });
+  };
+  const snap = a => (a ? JSON.parse(JSON.stringify(a)) : null);
+  const waFallback = (o, a) => {
+    if (quiet || (o.item.answer !== 'none' && waBusy)) return;
+    const b = build(o, cand, setup, ctx);
+    if (!b.wa) return;
+    a.waAt = a.sentAt = nowIso(now); a.via = 'call+whatsapp';
+    if (o.item.answer !== 'none') { r.pending = { key: o.key, at: nowIso(now) }; waBusy = true; }
+    out.push({ key: o.key, item: o.item, wa: b.wa });
+  };
   for (const o of occurrences(setup)) {
     const it = o.item;
     const a = r.asks[o.key];
     const t = at(doj, o.day, it.time);
     if (t == null || now < t) continue;
+    const mode = calls ? callMode(it) : '';
     if (a && a.sentAt) {
+      if (a.answer || a.closed) continue;
+      if (callGoing(a.call, now)) continue; // wait for the call to finish
+      // AI calls for this step (Automatic calls on)
+      if (mode && a.call) {
+        const c = a.call;
+        const reached = c.status === 'answered';
+        if (reached && it.answer === 'none') continue; // the information was given on the call
+        const late = now >= t + 2 * D;
+        if (!reached && c.tries < CALL_TRIES && !late) {
+          if (now >= Date.parse(c.at) + CALL_RETRY_H * H && canCall()) placeCall(o, a, snap(a));
+          if (mode === 'call' && !a.waAt) continue; // keep trying by phone first
+        }
+        if (mode === 'call' && !a.waAt) { waFallback(o, a); continue; } // the call did not get the answer: WhatsApp
+      } else if (mode && !a.call && (mode === 'both' || (mode === 'noreply' && it.answer !== 'none'))) {
+        // WhatsApp went first: call when there is no answer (straight away for "both"), within two days.
+        const callAt = Date.parse(a.sentAt) + (mode === 'both' ? 0 : (it.callAfter || 24) * H);
+        if (now >= callAt && now < callAt + 2 * D) {
+          if (canCall()) { placeCall(o, a, snap(a)); if (!a.remindedAt && it.answer !== 'none') a.remindedAt = nowIso(now); }
+          continue; // no reminder or escalation before the call has had its chance
+        }
+      }
+      if (it.answer === 'none') continue;
       // reminder, then escalation, for unanswered questions
-      if (a.answer || it.answer === 'none' || a.closed) continue;
       if (it.remind > 0 && !a.remindedAt && now >= Date.parse(a.sentAt) + it.remind * H) {
         if (wantsWa(it) && (quiet || waBusy)) continue;
         const b = build(o, cand, setup, ctx, { reminder: true });
@@ -245,10 +305,12 @@ function due(cand, setup, now, ctx = {}) {
         out.push(Object.assign(b, { reminder: true }));
         continue;
       }
-      const base = a.remindedAt || (it.remind > 0 ? null : a.sentAt);
+      let base = a.remindedAt || (it.remind > 0 ? null : a.sentAt);
+      if (base && a.call && a.call.at && Date.parse(a.call.at) > Date.parse(base)) base = a.call.at;
+      if (base && a.waAt && Date.parse(a.waAt) > Date.parse(base)) base = a.waAt;
       if (it.escalate && !a.escalatedAt && base && now >= Date.parse(base) + Math.max(24, it.remind || 24) * H) {
         a.escalatedAt = nowIso(now);
-        cand.handovers = (cand.handovers || []).concat([{ why: `No answer: "${it.title}"${it.to !== 'candidate' ? ' (' + it.to + ')' : ''}`, at: nowIso(now), open: true }]);
+        cand.handovers = (cand.handovers || []).concat([{ why: `No answer: "${it.title}"${it.to !== 'candidate' ? ' (' + it.to + ')' : ''}${a.call ? ` (also called ${a.call.tries}x)` : ''}`, at: nowIso(now), open: true }]);
         out.push({ key: o.key, item: it, escalate: true });
       }
       continue;
@@ -256,6 +318,11 @@ function due(cand, setup, now, ctx = {}) {
     if (a && a.skipped) continue;
     if (stopped(r, o) || (it.when === 'induction_open' && !(ctx.pending || []).length)) { r.asks[o.key] = { skipped: true, why: 'not needed' }; continue; }
     if (now > t + 3 * D) { r.asks[o.key] = { skipped: true, why: 'too late' }; continue; }
+    // "Call first": call within calling hours (waiting up to a day for them), otherwise WhatsApp.
+    if (mode === 'call') {
+      if (canCall()) { const prev = snap(a); placeCall(o, r.asks[o.key] = { sentAt: nowIso(now), via: 'call' }, prev); continue; }
+      if (now < t + D) continue;
+    }
     const isQuestion = it.answer !== 'none';
     if (wantsWa(it) && (quiet || (isQuestion && waBusy))) continue;
     const b = build(o, cand, setup, ctx);
@@ -263,8 +330,60 @@ function due(cand, setup, now, ctx = {}) {
     r.asks[o.key] = { sentAt: nowIso(now), via: [b.wa ? 'whatsapp' : '', b.email ? 'email' : ''].filter(Boolean).join('+') };
     if (b.wa && isQuestion) { r.pending = { key: o.key, at: nowIso(now) }; waBusy = true; }
     out.push(b);
+    // "WhatsApp and a call": the call follows the message straight away when calling is possible now.
+    if (mode === 'both' && canCall()) { const na = r.asks[o.key]; placeCall(o, na, snap(na)); }
   }
   return out;
+}
+
+// A call placed by the scheduler did not start (outside hours, a call already going on, LiveKit error): undo it.
+function undoCall(cand, c) {
+  const r = state(cand);
+  if (c.prev) r.asks[c.key] = c.prev; else delete r.asks[c.key];
+}
+
+// HR "Call now" on a check-in step (works whether Automatic calls is on or off).
+function callNow(cand, setup, key, ctx = {}) {
+  const o = occurrences(setup).find(x => x.key === key);
+  if (!o) return null;
+  if (o.item.to !== 'candidate') return { error: 'not_for_candidate' };
+  return { key, item: o.item, call: callScript(o, cand, setup, ctx) };
+}
+function markCalled(cand, key, callId, by) {
+  const r = state(cand);
+  const a = r.asks[key] = Object.assign({}, r.asks[key]);
+  if (!a.sentAt) { a.sentAt = nowIso(); a.via = 'call'; }
+  a.call = { tries: ((a.call && a.call.tries) || 0) + 1, at: nowIso(), status: 'dialing', callId, by };
+}
+
+// The answer the voice agent heard, in the step's own terms ('' when it does not fit).
+function normalizeAnswer(item, raw, refYear) {
+  const v = String(raw == null ? '' : raw).trim();
+  if (!v || /^(none|n\/a|na|not (answered|discussed|said|asked)|unknown|unclear|-)$/i.test(v)) return '';
+  if (item.answer === 'buttons') {
+    const low = v.toLowerCase();
+    return item.options.find(op => op.toLowerCase() === low) || item.options.find(op => low.startsWith(op.toLowerCase()) || op.toLowerCase().startsWith(low)) || '';
+  }
+  if (item.answer === 'rating') { const m = /\b([1-5])\b/.exec(v); return m ? m[1] : ''; }
+  if (item.answer === 'date') return parseDate(v, refYear);
+  if (item.answer === 'text') return v.slice(0, 500);
+  return '';
+}
+
+// The voice agent reported back on a step's call: how it went, and the answer when one was given
+// (recorded exactly like a WhatsApp answer, so flags alert HR the same way).
+function callResult(cand, setup, key, call, raw) {
+  const r = state(cand);
+  const a = r.asks[key] = Object.assign({ sentAt: call.at || nowIso(), via: 'call' }, r.asks[key]);
+  a.call = Object.assign({ tries: 1 }, a.call, { status: call.status, callId: call.callId, endedAt: call.endedAt || nowIso() });
+  const o = occurrences(setup).find(x => x.key === key);
+  if (!o || call.status !== 'answered' || a.answer) return { recorded: false };
+  const doj = (cand.profile && cand.profile.doj) || '';
+  const value = normalizeAnswer(o.item, raw, +(doj.slice(0, 4)) || new Date().getUTCFullYear());
+  a.call.got = Boolean(value);
+  if (!value) return { recorded: false };
+  const res = record(cand, setup, key, value, 'call');
+  return { recorded: true, value, flagged: res.flagged };
 }
 
 // HR "Send now" for one occurrence key.
@@ -353,4 +472,4 @@ function list(setup, doj) {
   return occurrences(setup).map(o => ({ key: o.key, id: o.item.id, title: o.item.title + (/@/.test(o.key) ? ` (D${o.day >= 0 ? '+' : ''}${o.day})` : ''), stage: o.item.stage, day: o.day, time: o.item.time, date: addDaysIso(doj, o.day), item: o.item }));
 }
 
-module.exports = { defaults, cleanSetup, occurrences, itemsOf, due, sendNow, onInbound, record, fill, list, parseDate, at, mapUrl, DEFAULT_ITEMS };
+module.exports = { defaults, cleanSetup, occurrences, itemsOf, due, sendNow, onInbound, record, fill, list, parseDate, at, mapUrl, DEFAULT_ITEMS, callNow, markCalled, callResult, undoCall, callScript, normalizeAnswer, CALLS };

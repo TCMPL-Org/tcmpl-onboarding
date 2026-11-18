@@ -27,7 +27,8 @@ const PURPOSES = {
   noreply: 'Follow-up call (no WhatsApp reply)',
   eve: 'Day-before-joining call',
   close: '90-day closing call',
-  general: 'Call from HR'
+  general: 'Call from HR',
+  checkin: 'Journey step call'
 };
 // What each call should find out; read from the transcript after the call (so the agent never pauses to save).
 const FIELDS = {
@@ -38,13 +39,33 @@ const FIELDS = {
   general: 'outcome (one line)'
 };
 
+// A journey step's call (Client setup → Journey setup): what to find out, in the step's own answer terms.
+function stepFields(st) {
+  if (!st) return FIELDS.general;
+  if (st.answer === 'buttons') return `answer (exactly one of: ${st.options.map(o => '"' + o + '"').join(' / ')}; the option closest to what the candidate said, or empty if they did not answer), questions (what they asked, if anything)`;
+  if (st.answer === 'rating') return 'answer (their rating as a single number 1-5, or empty), reason (why, in a few words), questions (what they asked, if anything)';
+  if (st.answer === 'date') return 'answer (the date as dd/mm/yyyy, or empty), questions (what they asked, if anything)';
+  if (st.answer === 'text') return 'answer (their answer in one line, or empty), questions (what they asked, if anything)';
+  return 'understood (yes / no), questions (what they asked, if anything)';
+}
+
+// What the voice agent says and asks on a journey step's call. Also sent as the HR note, so an older voice agent
+// (without the "checkin" purpose) still follows it as a general call.
+function stepBrief(st) {
+  if (!st) return '';
+  const ask = st.answer === 'none'
+    ? `Tell them this, briefly and in your own words: "${st.question}". Check they have understood, and ask if they have any questions.`
+    : `Ask this, in your own simple words: "${st.question}".${st.answer === 'buttons' ? ` The possible answers are: ${st.options.join(', ')}.` : st.answer === 'rating' ? ' Ask for a rating from 1 (poor) to 5 (great), and why.' : st.answer === 'date' ? ' Get the exact date.' : ''}`;
+  return `This call is the onboarding step "${st.title}". ${ask}`.slice(0, 1200);
+}
+
 async function extract(call, transcript) {
   if (!transcript.length || !ai.aiConfigured()) return null;
   const lines = transcript.map(t => `${t.role === 'candidate' ? 'Candidate' : 'Agent'}: ${t.text}`).join('\n').slice(0, 12000);
   const prompt = `This is the transcript of an onboarding phone call (${call.title || 'call'}) between an AI assistant and a candidate. ` +
     `Return JSON: {"answers": {<field>: <short answer in English>}, "flags": [<things HR must act on: questions the assistant could not answer, doubts about joining, complaints, requests to talk to a person>], ` +
     `"callback": "<when to call back, if they asked; else empty>", "summary": "<one sentence in English>"}. ` +
-    `Fields to fill (leave out any not discussed): ${FIELDS[call.purpose] || FIELDS.general}. Use only what the candidate actually said.\n\nTranscript:\n${lines}`;
+    `Fields to fill (leave out any not discussed): ${call.step ? stepFields(call.step) : FIELDS[call.purpose] || FIELDS.general}. Use only what the candidate actually said.\n\nTranscript:\n${lines}`;
   try { return await ai.completeJson(prompt); } catch (e) { console.error('call extraction failed', e && e.message); return null; }
 }
 
@@ -111,6 +132,14 @@ async function callSettings(store, client) {
   return (rec && rec.data && rec.data.calls) || {};
 }
 
+// A journey step's call script from the app (see checkins.callScript), checked and trimmed.
+function cleanStep(x) {
+  if (!x || typeof x !== 'object' || !str(x.key, 80) || !str(x.question, 900)) return null;
+  const answer = ['buttons', 'rating', 'date', 'text', 'none'].includes(x.answer) ? x.answer : 'text';
+  const list = v => (Array.isArray(v) ? v.map(o => str(String(o), 20)).filter(Boolean).slice(0, 6) : []);
+  return { key: str(x.key, 80), title: str(x.title, 120) || 'Check-in', question: str(x.question, 900), answer, options: list(x.options), flag: list(x.flag) };
+}
+
 /* ---------- start a call ---------- */
 async function start(p, user, opts = {}) {
   const store = getStore();
@@ -118,12 +147,14 @@ async function start(p, user, opts = {}) {
   if (!callsConfigured()) return { status: 503, body: { error: 'calls_not_configured', detail: 'Add LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET and CALL_AGENT_SECRET in Azure.' } };
   const candidateId = str(p && p.candidateId, 40);
   if (!/^wa-\d{11,15}$/.test(candidateId)) return { status: 400, body: { error: 'candidate_required' } };
-  const rec = await store.get('candidates', candidateId);
+  // The scheduler passes the candidate it is working on (and saves it itself); otherwise read it here.
+  const rec = opts.cand ? { data: opts.cand } : await store.get('candidates', candidateId);
   if (!rec) return { status: 404, body: { error: 'candidate_not_found' } };
   const cand = rec.data;
   const client = (cand.profile && cand.profile.client) || cand.client || '';
   if (client && !(await modules.enabled(store, client, 'onboarding'))) return { status: 403, body: { error: 'onboarding_off' } };
-  const purpose = PURPOSES[p.purpose] ? p.purpose : 'general';
+  const st = cleanStep(p.checkin);
+  const purpose = st ? 'checkin' : (PURPOSES[p.purpose] && p.purpose !== 'checkin' ? p.purpose : 'general');
   if (!p.force && !withinHours()) return { status: 409, body: { error: 'outside_hours', detail: `Calls go out between ${process.env.CALL_HOURS || '9-20'} h IST.` } };
   // No second call while one is still going on for this candidate.
   if (cand.lastCall && cand.lastCall.status === 'dialing' && Date.now() - Date.parse(cand.lastCall.at) < 12 * 60000) return { status: 409, body: { error: 'call_in_progress' } };
@@ -139,7 +170,7 @@ async function start(p, user, opts = {}) {
     doj: niceDate(cand.doj || (cand.profile && cand.profile.doj)), agentName: cand.agentName || '',
     reportingTime: factLine(facts, 'reporting|report time|timing'), address: factLine(facts, 'address|office|location'),
     contact: factLine(facts, 'contact|poc|point of contact|meet'), documents: factLine(facts, 'documents|carry'),
-    facts: facts.slice(0, 3000), note: str(p.note, 600),
+    facts: facts.slice(0, 3000), note: st ? stepBrief(st).slice(0, 600) : str(p.note, 600), step: st || undefined,
     language: settings.language || 'auto', voice: settings.voice || '', maxSeconds: 600
   };
 
@@ -152,9 +183,11 @@ async function start(p, user, opts = {}) {
 
   const at = new Date().toISOString();
   const by = (user && user.name) || SYSTEM.name;
-  await store.put('calls', callId, { callId, candidateId, client, purpose, title: PURPOSES[purpose], status: 'dialing', room, requestedBy: by, auto: Boolean(opts.auto), at }, user || SYSTEM);
-  await store.put('candidates', candidateId, Object.assign({}, cand, { lastCall: { callId, purpose, status: 'dialing', at } }), user || SYSTEM);
-  await store.put('messages', 'o-' + callId, { candidateId, direction: 'out', channel: 'call', kind: 'call', source: 'call', callId, text: `📞 ${PURPOSES[purpose]}: calling ${meta.phone}…`, by, at }, user || SYSTEM);
+  const title = st ? `${PURPOSES.checkin}: ${st.title}` : PURPOSES[purpose];
+  await store.put('calls', callId, Object.assign({ callId, candidateId, client, purpose, title, status: 'dialing', room, requestedBy: by, auto: Boolean(opts.auto), at }, st ? { checkinKey: st.key, step: st } : {}), user || SYSTEM);
+  if (opts.cand) opts.cand.lastCall = { callId, purpose, status: 'dialing', at };
+  else await store.put('candidates', candidateId, Object.assign({}, cand, { lastCall: { callId, purpose, status: 'dialing', at } }), user || SYSTEM);
+  await store.put('messages', 'o-' + callId, { candidateId, direction: 'out', channel: 'call', kind: 'call', source: 'call', callId, text: `📞 ${title}${opts.auto ? ' (automatic)' : ''}: calling ${meta.phone}…`, by, at }, user || SYSTEM);
   return { status: 200, body: { callId, purpose } };
 }
 
@@ -216,6 +249,15 @@ async function result(body, key) {
     for (const f of flags) handovers.push({ why: `Call: ${f}`, at: now, open: true });
     if (callback) handovers.push({ why: `Call back requested on the ${call.title || 'call'}: ${callback}`, at: now, open: true });
     cand.handovers = handovers;
+    // A journey step's call: the answer counts like a WhatsApp answer (step done, red answers alert HR).
+    if (call.checkinKey) {
+      try {
+        const setup = await require('./induction-run').setupFor(store, (cand.profile && cand.profile.client) || cand.client || call.client);
+        const r = require('./checkins').callResult(cand, setup, call.checkinKey, call, answers.answer);
+        call.stepAnswer = r.recorded ? r.value : '';
+        if (r.recorded) await store.put('calls', callId, call, SYSTEM);
+      } catch (e) { console.error('call step update failed', e && e.message); }
+    }
     await store.put('candidates', call.candidateId, cand, SYSTEM);
     try { await notify.alertHandovers(store, call.candidateId, cand) && await store.put('candidates', call.candidateId, cand, SYSTEM); } catch (e) { console.error('call alert failed', e && e.message); }
   }
@@ -223,6 +265,7 @@ async function result(body, key) {
   const mins = call.durationSec ? ` (${Math.floor(call.durationSec / 60)}:${String(call.durationSec % 60).padStart(2, '0')})` : '';
   const lines = [`📞 ${call.title || 'Call'}: ${STATUS[status]}${mins}${status !== 'answered' && call.sipStatus ? ` · ${call.sipStatus}` : ''}`];
   if (summary) lines.push(summary);
+  if (call.checkinKey) lines.push(call.stepAnswer ? `✓ Step answered on the call: ${call.stepAnswer}` : status === 'answered' ? '… The step was not answered on the call.' : '… The step is still open.');
   for (const [k, v] of Object.entries(answers)) lines.push(`• ${k.replace(/_/g, ' ')}: ${v}`);
   for (const f of flags) lines.push(`⚠ For HR: ${f}`);
   if (callback) lines.push(`↩ Call back: ${callback}`);
@@ -233,4 +276,4 @@ async function result(body, key) {
   return { status: 200, body: { ok: true } };
 }
 
-module.exports = { start, result, callsConfigured, withinHours, PURPOSES, _token: token };
+module.exports = { start, result, callsConfigured, withinHours, PURPOSES, stepFields, stepBrief, cleanStep, _token: token };
