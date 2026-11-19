@@ -333,6 +333,50 @@ async function scan(buffer) {
 }
 
 /* ---------- fill ---------- */
+/* ---------- floating tables ---------- */
+// A table set to "Text wrapping: Around" floats. When there is no real room beside it (less than an inch),
+// Word leaves that sliver empty, but browser previews and PDF converters pour the next paragraph into it one
+// word per line. In previews such tables are made ordinary (in line) tables at the same left position.
+const TW = v => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : 0; };
+function textWidth(doc) {
+  const secs = doc.getElementsByTagNameNS(NS.w, 'sectPr');
+  const sec = secs.length ? secs[secs.length - 1] : null;
+  if (!sec) return 0;
+  const sz = sec.getElementsByTagNameNS(NS.w, 'pgSz')[0], mar = sec.getElementsByTagNameNS(NS.w, 'pgMar')[0];
+  if (!sz || !mar) return 0;
+  return { width: TW(sz.getAttributeNS(NS.w, 'w')) - TW(mar.getAttributeNS(NS.w, 'left')) - TW(mar.getAttributeNS(NS.w, 'right')), left: TW(mar.getAttributeNS(NS.w, 'left')) };
+}
+function inlineCrampedTables(doc) {
+  const page = textWidth(doc);
+  if (!page || page.width <= 0) return 0;
+  let n = 0;
+  for (const tblPr of [...doc.getElementsByTagNameNS(NS.w, 'tblPr')]) {
+    const fp = [...tblPr.childNodes].find(x => x.localName === 'tblpPr');
+    if (!fp) continue;
+    const tbl = tblPr.parentNode;
+    const g = tbl && [...tbl.childNodes].find(x => x.localName === 'tblGrid');
+    const tw = [...tblPr.childNodes].find(x => x.localName === 'tblW');
+    let width = tw && tw.getAttributeNS(NS.w, 'type') === 'dxa' ? TW(tw.getAttributeNS(NS.w, 'w')) : 0;
+    if (!width && g) width = [...g.childNodes].filter(x => x.localName === 'gridCol').reduce((a, c) => a + TW(c.getAttributeNS(NS.w, 'w')), 0);
+    if (!width || fp.getAttributeNS(NS.w, 'tblpXSpec')) continue;
+    const anchor = fp.getAttributeNS(NS.w, 'horzAnchor') || 'text';
+    let x = TW(fp.getAttributeNS(NS.w, 'tblpX'));
+    if (anchor === 'page') x -= page.left;
+    const room = Math.max(x - TW(fp.getAttributeNS(NS.w, 'leftFromText')), page.width - x - width - TW(fp.getAttributeNS(NS.w, 'rightFromText')));
+    if (room >= 1440) continue; // real room for text beside it: leave the layout alone
+    tblPr.removeChild(fp);
+    for (const o of [...tblPr.childNodes].filter(c => c.localName === 'tblOverlap')) tblPr.removeChild(o);
+    if (x > 0 && ![...tblPr.childNodes].some(c => c.localName === 'tblInd')) {
+      const ind = doc.createElementNS(NS.w, 'w:tblInd');
+      ind.setAttributeNS(NS.w, 'w:w', String(x)); ind.setAttributeNS(NS.w, 'w:type', 'dxa');
+      const after = [...tblPr.childNodes].find(c => ['tblBorders', 'shd', 'tblLayout', 'tblCellMar', 'tblLook', 'tblCaption', 'tblDescription'].includes(c.localName));
+      tblPr.insertBefore(ind, after || null);
+    }
+    n++;
+  }
+  return n;
+}
+
 async function fill(buffer, opts = {}) {
   const zip = await open(buffer);
   const fields = opts.fields || {}, tables = opts.tables || {}, images = opts.images || {}, preview = Boolean(opts.preview);
@@ -437,6 +481,9 @@ async function fill(buffer, opts = {}) {
       return String(v);
     });
 
+    // Previews only: the browser preview pours text into the sliver beside a full-width floating table. PDFs
+    // (LibreOffice, Word) lay those tables out like Word does, so the candidate's letter keeps its exact layout.
+    if (part === 'word/document.xml' && preview) inlineCrampedTables(doc);
     zip.file(part, serialize(doc));
     if (relsChanged) zip.file(relsPath, serialize(rels));
   }
@@ -573,4 +620,4 @@ async function toText(buffer) {
   return out;
 }
 
-module.exports = { scan, fill, toText, mergeName, imageSize };
+module.exports = { scan, fill, toText, mergeName, imageSize, inlineCrampedTables };

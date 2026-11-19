@@ -220,3 +220,21 @@ test('named journeys: shared, so only admins and all-client HR change them', asy
   r = await handlers.data({ method: 'PUT', col: 'flows', id: 'fl-nurses01', body, user: { email: 'all@tc.com', role: 'hr', clients: ['*'] } });
   assert.equal(r.status, 200);
 });
+
+test('floating full-width tables: in line in previews only; the candidate\'s letter keeps the original layout', async () => {
+  const floating = (x, w) => `<w:tbl><w:tblPr><w:tblpPr w:leftFromText="187" w:rightFromText="187" w:vertAnchor="text" w:horzAnchor="margin" w:tblpX="${x}" w:tblpY="134"/><w:tblW w:w="${w}" w:type="dxa"/><w:tblOverlap w:val="never"/><w:tblLook w:val="04A0"/></w:tblPr><w:tblGrid><w:gridCol w:w="${w}"/></w:tblGrid><w:tr><w:tc>${p(t('cell'))}</w:tc></w:tr></w:tbl>`;
+  const sect = '<w:sectPr><w:pgSz w:w="11910" w:h="16840"/><w:pgMar w:top="760" w:right="620" w:bottom="620" w:left="440" w:header="0" w:footer="1134" w:gutter="0"/></w:sectPr>';
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>');
+  zip.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8"?><w:document ${W}><w:body>${floating(423, 10360)}${p(t('**Note: the salary is subject to TDS.'))}${floating(400, 4000)}${p(t('Text beside a narrow table.'))}${sect}</w:body></w:document>`);
+  const buf = await zip.generateAsync({ type: 'nodebuffer' });
+
+  const preview = (await textOf((await merge.fill(buf, { preview: true })).buffer)).doc;
+  const tbls = preview.split('<w:tbl>').slice(1);
+  assert.ok(!tbls[0].includes('tblpPr') && !tbls[0].includes('tblOverlap'), 'the full-width table is in line in the preview');
+  assert.match(tbls[0], /<w:tblInd w:w="423" w:type="dxa"\/>/, 'at the same left position');
+  assert.ok(tbls[1].includes('tblpPr'), 'a narrow table with real room beside it still floats');
+
+  const final = (await textOf((await merge.fill(buf, {})).buffer)).doc;
+  assert.equal((final.match(/tblpPr/g) || []).length, 2, 'the letter sent to the candidate is unchanged');
+});

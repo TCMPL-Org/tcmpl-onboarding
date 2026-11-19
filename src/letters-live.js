@@ -399,7 +399,7 @@ async function preview() {
     docxLib = docxLib || await import('docx-preview');
     const holder = document.createElement('div');
     holder.className = 'dx-doc';
-    await docxLib.renderAsync(b64Blob(r.body.docxBase64, DOCX), holder, null, { className: 'docx', inWrapper: true, breakPages: true, ignoreLastRenderedPageBreak: true, experimental: false, renderHeaders: true, renderFooters: true });
+    await docxLib.renderAsync(b64Blob(r.body.docxBase64, DOCX), holder, null, { className: 'docx', inWrapper: true, breakPages: true, ignoreLastRenderedPageBreak: false, experimental: false, renderHeaders: true, renderFooters: true });
     if (seq !== renderSeq) return;
     lp.replaceChildren(holder);
     lp.classList.add('dx-on');
